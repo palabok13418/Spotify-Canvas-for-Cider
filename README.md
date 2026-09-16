@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icon.svg" alt="Canvas for Cider logo" width="180" />
+  <img src="logo.png" alt="Canvas for Cider logo" width="180" />
 </p>
 
 <h1 align="center">Canvas for Cider</h1>

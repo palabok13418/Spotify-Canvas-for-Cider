@@ -2,8 +2,8 @@
 import { onMounted, onUnmounted } from "vue";
 import { subscribeEvent } from "../cider";
 import { getCurrentTrack, hasCiderTrack } from "../core/currentTrack";
-import { buildSpotifySearchQueries } from "../search-plan";
-import { useConfig, getEffectiveSpDc } from "../config";
+import { useConfig } from "../config";
+import { resolveCanvasRemote, getCanvasApiBase } from "../canvas-api";
 import { canvasUrl as sharedCanvasUrl, canvasActive } from "../state";
 
 interface ResolveResult {
@@ -15,10 +15,9 @@ interface ResolveResult {
   reason?: string;
 }
 
-const cfg = useConfig();
+useConfig();
 const canvasUrl = sharedCanvasUrl;
 const debugPrefix = "[Canvas for Cider]";
-const RESOLVER_ORIGIN = "http://127.0.0.1:3058";
 
 const positiveCanvasCache = new Map<string, ResolveResult>();
 const CACHE_LIMIT = 48;
@@ -78,7 +77,7 @@ function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: 
   activeTrackIdentity = identity;
   canvasUrl.value = cached.canvasUrl;
   canvasActive.value = true;
-  log("Canvas cache hit; skipping Spotify search", {
+  log("Canvas cache hit; skipping remote lookup", {
     trackIdentity: identity,
     spotifyTrackId: cached.spotifyTrackId,
     matchedTitle: cached.matchedTitle || track.title,
@@ -88,9 +87,10 @@ function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: 
 }
 
 async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stableTrackIdentity(track)) {
-  const effectiveSpDc = getEffectiveSpDc(cfg);
-  if (!effectiveSpDc) { warn("sp_dc is not configured; skipping Canvas lookup"); return; }
-  if (!track.title || !track.artist) { warn("Track metadata is incomplete; skipping Canvas lookup", track); return; }
+  if (!track.title || !track.artist) {
+    warn("Track metadata is incomplete; skipping Canvas lookup", track);
+    return;
+  }
 
   const cached = cacheGet(expectedIdentity);
   if (cached) {
@@ -113,47 +113,17 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
   canvasUrl.value = "";
   canvasActive.value = false;
 
-  log("Canvas resolver starting from song lifecycle", {
+  log("Canvas API resolver starting", {
     sequence: seq,
     trackIdentity: expectedIdentity,
     title: track.title,
     artist: track.artist,
-    album: track.album
+    album: track.album,
+    api: getCanvasApiBase(),
   });
-  log("Current Apple Music/Cider track info", track);
-  log("Spotify search plan", buildSpotifySearchQueries(track));
 
   try {
-    const response = await fetch(`${RESOLVER_ORIGIN}/api/canvas/resolve`, {
-      method: "POST",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({
-        spDc: effectiveSpDc,
-        title: track.title,
-        artist: track.artist,
-        album: track.album,
-        albumArtist: track.albumArtist,
-        composer: track.composer,
-        genre: track.genre,
-        contentRating: track.contentRating,
-        catalogId: track.catalogId,
-        durationMs: track.durationMs,
-        isrc: track.isrc,
-        releaseYear: track.releaseYear,
-        trackNumber: track.trackNumber,
-        discNumber: track.discNumber,
-        artworkUrl: track.artworkUrl
-      }),
-      signal: controller.signal,
-    });
-
-    const responseText = await response.text();
-    let data: ResolveResult;
-    try {
-      data = JSON.parse(responseText) as ResolveResult;
-    } catch (parseError) {
-      throw new Error(`resolver returned invalid JSON (${response.status}): ${String(parseError)}`);
-    }
+    const data = await resolveCanvasRemote(track, controller.signal) as ResolveResult;
 
     const currentIdentity = stableTrackIdentity(getCurrentTrack());
     if (controller.signal.aborted || seq !== sequence || expectedIdentity !== activeTrackIdentity || currentIdentity !== expectedIdentity) {
@@ -167,19 +137,20 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
       return;
     }
 
-    if (!response.ok) throw new Error(data.reason || `resolver ${response.status}`);
-
     if (data.canvasUrl) {
       cachePut(expectedIdentity, data);
       canvasUrl.value = data.canvasUrl;
       canvasActive.value = true;
-      log("Canvas URL found and cached", {
+      log("Canvas URL received from API", {
         spotifyTrackId: data.spotifyTrackId,
         trackIdentity: expectedIdentity,
-        canvasUrl: data.canvasUrl
+        hasCanvasUrl: true,
       });
     } else {
-      warn("No Canvas URL returned", { spotifyTrackId: data.spotifyTrackId, reason: data.reason });
+      warn("No Canvas URL returned", {
+        spotifyTrackId: data.spotifyTrackId,
+        reason: data.reason,
+      });
     }
   } catch (error) {
     if (controller.signal.aborted) return;

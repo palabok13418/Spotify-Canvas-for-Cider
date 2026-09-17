@@ -4,14 +4,10 @@ import { saveConfig } from "./cider";
 export type CanvasPlacement = "lyrics" | "navigation" | "mini";
 
 export interface PluginConfig {
-  spDc: string;
   placement: CanvasPlacement;
 }
 
-export const HARDCODED_SP_DC = "";
-
 export const defaults: PluginConfig = {
-  spDc: "",
   placement: "lyrics",
 };
 
@@ -31,9 +27,4 @@ export function useConfig(): PluginConfig {
 
 export async function persistConfig() {
   await saveConfig();
-}
-
-export function getEffectiveSpDc(config?: Partial<PluginConfig>): string {
-  const configured = typeof config?.spDc === "string" ? config.spDc.trim() : "";
-  return configured || HARDCODED_SP_DC.trim();
 }

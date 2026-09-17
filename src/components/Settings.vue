@@ -1,7 +1,6 @@
 <script setup lang="ts">
-import { useConfig } from "../config";
 import CanvasSettingsPanel from "./CanvasSettingsPanel.vue";
-const cfg = useConfig();
+
 const logoUrl = "/logo.png";
 </script>
 
@@ -16,7 +15,7 @@ const logoUrl = "/logo.png";
     </div>
     <CanvasSettingsPanel />
     <div class="status">
-      Canvas is always active. Choose the Cider area where the Canvas portal should appear.
+      Canvas is provided through the managed Canvas API. Spotify account credentials are handled by the API server and are not stored in Cider.
     </div>
   </section>
 </template>

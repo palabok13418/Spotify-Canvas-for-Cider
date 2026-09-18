@@ -3,6 +3,21 @@ import { persistConfig, useConfig, type CanvasPlacement } from "../config";
 
 const cfg = useConfig();
 
+function updateTransparency(event: Event) {
+  const input = event.target as HTMLInputElement | null;
+  if (!input) return;
+  const value = Number(input.value);
+  cfg.transparency = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 50;
+}
+
+async function saveTransparency() {
+  try {
+    await persistConfig();
+  } catch (error) {
+    console.error("[Canvas for Cider] Failed to save Canvas transparency", error);
+  }
+}
+
 async function selectPlacement(value: CanvasPlacement) {
   cfg.placement = value;
   try {
@@ -36,6 +51,28 @@ async function selectPlacement(value: CanvasPlacement) {
         </button>
       </div>
     </div>
+
+    <div class="field">
+      <div class="field-heading">
+        <span>Canvas transparency</span>
+        <span class="value">{{ cfg.transparency }}%</span>
+      </div>
+      <input
+        class="transparency-slider"
+        type="range"
+        min="0"
+        max="100"
+        step="1"
+        :value="cfg.transparency"
+        aria-label="Canvas transparency"
+        @input="updateTransparency"
+        @change="saveTransparency"
+      />
+      <div class="range-hint">
+        <span>Visible</span>
+        <span>Transparent</span>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -43,6 +80,7 @@ async function selectPlacement(value: CanvasPlacement) {
 .panel{display:grid;gap:18px}
 .field{display:grid;gap:8px}
 .field>span{font-weight:650}
+.field-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.value{font-variant-numeric:tabular-nums;opacity:.72}.transparency-slider{width:100%;margin:2px 0 0;accent-color:currentColor;cursor:pointer}.range-hint{display:flex;justify-content:space-between;font-size:12px;opacity:.60}
 .placement-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .placement-option{border:1px solid color-mix(in srgb,currentColor 18%,transparent);background:color-mix(in srgb,currentColor 7%,transparent);color:inherit;border-radius:11px;padding:10px 14px;min-height:42px;font:inherit;font-weight:650;cursor:pointer}
 .placement-option:hover{background:color-mix(in srgb,currentColor 12%,transparent)}

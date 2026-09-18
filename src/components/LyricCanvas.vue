@@ -227,33 +227,86 @@ function findNavigationHost(): HTMLElement | null {
   return best;
 }
 
+
+function syncNavigationContrast(host: HTMLElement | null) {
+  const marked = document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast");
+  for (const el of marked) {
+    if (cfg.placement !== "navigation" || el !== host) {
+      el.classList.remove("canvascider-navigation-contrast");
+    }
+  }
+
+  if (cfg.placement === "navigation" && host) {
+    host.classList.add("canvascider-navigation-contrast");
+  }
+}
+
+function isLikelyMiniPlayerRect(rect: DOMRect) {
+  const viewportW = Math.max(window.innerWidth, 1);
+  const viewportH = Math.max(window.innerHeight, 1);
+  const bottomGap = Math.max(0, viewportH - rect.bottom);
+  const maxHeight = Math.min(220, viewportH * 0.34);
+
+  // A real Mini Player is bottom-docked and compact. Reject large ancestors or
+  // page-level containers so the Canvas cannot accidentally cover the whole UI.
+  return (
+    rect.width >= Math.min(280, viewportW * 0.35) &&
+    rect.height >= 50 &&
+    rect.height <= maxHeight &&
+    rect.top >= viewportH * 0.60 &&
+    bottomGap <= Math.max(36, viewportH * 0.06) &&
+    rect.left < viewportW &&
+    rect.right > 0
+  );
+}
+
 function findMiniPlayerHost(): HTMLElement | null {
   const candidates = new Set<HTMLElement>();
+
+  // First consider explicit Mini Player surfaces. These receive the strongest
+  // preference and are much safer than matching arbitrary ancestors.
   for (const selector of MINI_SELECTORS) {
     for (const el of document.querySelectorAll<HTMLElement>(selector)) candidates.add(el);
   }
-  // Mini-player can also be identified by ancestry of known player controls.
-  for (const el of document.querySelectorAll<HTMLElement>('[class*="mini"], [aria-label*="mini" i]')) {
-    let node: HTMLElement | null = el;
-    for (let depth = 0; node && depth < 5; depth++) {
-      if (isDisplayed(node) && /mini.?player|miniplayer/i.test(`${node.className} ${node.id} ${node.getAttribute("sfc-name") || ""}`)) candidates.add(node);
-      node = node.parentElement;
-    }
+
+  // Then consider elements whose own metadata identifies them as a mini player.
+  // Do not walk up arbitrary ancestors: large page wrappers are a common false
+  // positive and were the source of the oversized Canvas shown in screenshot 3.
+  for (const el of document.querySelectorAll<HTMLElement>(
+    '[class*="mini" i], [aria-label*="mini" i], [sfc-name*="mini" i], [data-testid*="mini" i]'
+  )) {
+    candidates.add(el);
   }
+
   let best: HTMLElement | null = null;
   let bestScore = -Infinity;
+
   for (const el of candidates) {
     if (!isDisplayed(el) || !isMiniContext(el)) continue;
     const r = el.getBoundingClientRect();
-    if (r.width < 280 || r.height < 50) continue;
-    if (r.top < window.innerHeight * 0.45) continue;
-    const bottomGap = Math.max(0, window.innerHeight - r.bottom);
-    const score = (r.width / Math.max(window.innerWidth, 1)) * 500 - (bottomGap / Math.max(window.innerHeight, 1)) * 600 + r.height;
-    if (score > bestScore) { bestScore = score; best = el; }
+    if (!isLikelyMiniPlayerRect(r)) continue;
+
+    const viewportW = Math.max(window.innerWidth, 1);
+    const viewportH = Math.max(window.innerHeight, 1);
+    const bottomGap = Math.max(0, viewportH - r.bottom);
+    const explicit = MINI_SELECTORS.some((selector) => el.matches(selector)) ? 10000 : 0;
+
+    // Prefer the explicit Mini Player surface, then the largest useful width,
+    // while still heavily penalizing distance from the viewport bottom.
+    const score =
+      explicit +
+      (r.width / viewportW) * 500 +
+      (r.height / viewportH) * 120 -
+      (bottomGap / viewportH) * 1200;
+
+    if (score > bestScore) {
+      bestScore = score;
+      best = el;
+    }
   }
+
   return best;
 }
-
 function findPlacementHost(): HTMLElement | null {
   if (cfg.placement === "navigation") return findNavigationHost();
   if (cfg.placement === "mini") return findMiniPlayerHost();
@@ -398,6 +451,7 @@ function setVideoSource(url: string, forceReload = false) {
 function setPortalRectangle(host: HTMLElement) {
   if (!rootEl || !portalLayer) return false;
 
+  syncNavigationContrast(host);
   const r = host.getBoundingClientRect();
   const visible = r.width > 120 && r.height > 100 && r.bottom > 0 && r.right > 0 &&
     r.left < window.innerWidth && r.top < window.innerHeight;
@@ -619,6 +673,9 @@ onUnmounted(() => {
   clearPlaybackGuard();
   if (playbackWatchdog !== null) window.clearInterval(playbackWatchdog);
   reducedMotionQuery?.removeEventListener?.("change", handleMotionChange);
+  document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast").forEach((el) => {
+    el.classList.remove("canvascider-navigation-contrast");
+  });
   rootEl = null;
   portalLayer = null;
   videoEl = null;
@@ -642,6 +699,11 @@ onUnmounted(() => {
 </template>
 
 <style>
+.canvascider-navigation-contrast,
+.canvascider-navigation-contrast *{
+  color:#fff!important;
+}
+
 canvascider-main-canvas{
   box-sizing:border-box!important;
   position:fixed!important;

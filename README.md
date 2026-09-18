@@ -22,6 +22,7 @@
 <div align="center">
   <font color="red"><strong>🔴 Active Bug: Canvas video is currently not appearing in the Mini Player.</strong></font>
 </div>
+
 ## What is Canvas for Cider?
 
 Canvas for Cider is a Cider PluginKit v4 plugin that displays Spotify Canvas videos while you're listening to Apple Music in Cider.

@@ -1,171 +1,329 @@
 <p align="center">
-  <img src="logo.png" alt="Canvas for Cider logo" width="180" />
+  <img src="logo.png" alt="Canvas for Cider" width="180">
 </p>
 
 <h1 align="center">Canvas for Cider</h1>
 
+<p align="center"><strong>Bring Spotify Canvas visuals to your Apple Music playback in Cider.</strong></p>
+<p align="center">A Cider PluginKit v4 plugin with Lyrics, Navigation, and Mini Player placement.</p>
+
 <p align="center">
-  Spotify Canvas video support for Cider, with a persistent portal, quick settings, and selectable placement.
+  <a href="https://github.com/palabok13418/Spotify-Canvas-for-Cider/releases">Releases</a>
+  · <a href="https://github.com/palabok13418/Spotify-Canvas-for-Cider/issues">Issues</a>
+  · <a href="https://github.com/palabok13418/Spotify-Canvas-for-Cider-API">Canvas API</a>
 </p>
 
-## About
+---
 
-Canvas for Cider is a Cider PluginKit v4 plugin that displays Spotify Canvas videos for the currently playing Apple Music track. The Cider plugin itself is credential-free: it sends track metadata to the managed Canvas API and receives a Canvas video URL.
+## 🎵 What is Canvas for Cider?
 
-The Spotify session used for Canvas discovery is kept entirely on the backend. A Cider user does not enter, store, or transmit an `sp_dc` token through the plugin.
+**Canvas for Cider** is a plugin for [Cider](https://cider.sh/) that shows short, looping **Spotify Canvas videos** while you listen to music from Apple Music.
 
-## Features
+Instead of opening Canvas in a separate window, the plugin places it directly into Cider’s interface. You can choose where it appears:
 
-- 🎬 Spotify Canvas MP4 playback inside Cider
-- 🔁 Persistent Canvas portal that survives Cider UI replacement
-- 🧭 Lyrics, Navigation, and Mini Player placement modes
-- 🎛️ Quick-settings button beside the Lyrics control
-- 🧠 Positive Canvas-result caching
-- ⚡ Stale-request cancellation when the current track changes
-- ♻️ Recovery when Cider rebuilds a target surface
-- 🌫️ Canvas blending/fading with the surrounding Cider UI
-- 🖱️ Canvas layers do not intercept Cider controls
-- ♿ Reduced-motion protection
+| Placement | What it does |
+| --- | --- |
+| **Lyrics** | Displays Canvas behind the main Lyrics area |
+| **Navigation** | Displays Canvas in the left navigation area |
+| **Mini Player** | Displays Canvas around the bottom Mini Player |
 
-## How it works
+The plugin is designed to stay attached to Cider even when Cider rebuilds or replaces parts of its interface.
 
-### 1. Identify the current track
+### 🔐 Do I need a Spotify token?
 
-Canvas for Cider reads the current Cider/Apple Music track and collects metadata such as title, artist, album, album artist, ISRC, duration, release year, track number, disc number, and artwork URL.
+**No.**
 
-### 2. Send metadata to the managed API
+The Cider plugin does **not** ask you to enter an sp_dc token or Spotify login information.
 
-The plugin sends that metadata to:
+The plugin sends the current song’s metadata to the project’s managed Canvas API. Spotify authentication and Canvas lookup happen on the server side.
 
-```text
-https://spotify-canvas-for-cider-api.vercel.app/api/resolve-canvas
-```
+> **Your Spotify session credential is not part of the Cider plugin bundle or its settings.**
 
-No Spotify credential is included in this request.
+---
 
-### 3. Backend Spotify lookup
+## ✨ Features
 
-The managed API uses its server-side Spotify session to authenticate with Spotify, search Spotify's internal services for the best matching track, and request the Canvas protobuf payload. The backend then returns the Canvas URL to Cider.
+- 🎬 **Spotify Canvas MP4 playback** inside Cider
+- 📝 **Lyrics placement** for a background-style Canvas effect
+- 🧭 **Navigation placement** for the Cider sidebar
+- 🎛️ **Mini Player placement** for the bottom playback area
+- 🔄 **Persistent Canvas portal** that survives Cider UI replacement
+- ⚡ **Automatic track detection** when the playing song changes
+- 🧠 **Positive-result caching** to reduce repeated lookups
+- 🛑 **Stale-request cancellation** so an old song cannot replace the new song’s Canvas
+- 🌫️ **Blending and fading** so Canvas behaves like a visual layer rather than covering controls
+- 🖱️ **Non-interactive Canvas layer** so normal Cider controls remain clickable
+- ♿ **Reduced-motion support** for users who prefer less animation
+- 🎛️ **Quick settings** available from the Canvas button beside Cider’s Lyrics control
 
-### 4. Render in Cider
+---
 
-The returned Canvas URL is attached to the persistent plugin-owned Canvas portal. The placement logic keeps the video synchronized with the selected Lyrics, Navigation, or Mini Player surface.
+## 🖥️ What happens when you play a song?
 
-## Settings
+    You play a song in Cider
+            │
+            ▼
+    Canvas for Cider reads the song information
+            │
+            ▼
+    Managed Canvas API finds the matching Spotify track
+            │
+            ▼
+    Spotify Canvas is requested
+            │
+            ▼
+    Canvas URL is returned to Cider
+            │
+            ▼
+    Canvas is displayed in your selected Cider location
 
-Canvas settings contain only the display/placement controls. There is no Spotify token textbox and no user `sp_dc` configuration.
+The plugin can use information such as:
 
-The backend Spotify credential is intentionally not part of the plugin source or plugin configuration.
+- Song title
+- Artist
+- Album
+- Album artist
+- ISRC
+- Duration
+- Release year
+- Track number
+- Disc number
+- Artwork URL
 
-## Quick-settings button
+The plugin itself does **not** send a Spotify credential with this metadata.
 
-A Canvas button is inserted beside Cider's Lyrics control when available. It opens the plugin-owned placement settings popup.
+---
 
-## Project structure
+## ⚙️ Settings
 
-```text
-Canvas for Cider/
-├── public/
-├── src/
-│   ├── components/
-│   ├── core/
-│   ├── boot.ts
-│   ├── canvas-api.ts
-│   ├── cider.ts
-│   ├── config.ts
-│   ├── main.ts
-│   ├── plugin.config.ts
-│   └── search-plan.ts
-├── scripts/
-├── BITCHORD-NOTICE.txt
-├── GPL-3.0.txt
-├── index.html
-├── package.json
-└── vite.config.ts
-```
+Canvas for Cider keeps its settings intentionally simple.
 
-The previous local Spotify/BitChord server implementation is no longer part of the Cider plugin. Spotify authentication and Canvas discovery live on the managed API instead.
+### Canvas placement
 
-## Development
+Choose one of:
+
+**Lyrics** · **Navigation** · **Mini Player**
+
+Your selection is saved through Cider’s plugin configuration.
+
+### Quick settings
+
+A small Canvas button is placed beside Cider’s Lyrics control when that control is available.
+
+Clicking it opens a compact placement menu without needing to open the full plugin settings page.
+
+---
+
+# 🧑‍💻 For developers
+
+Canvas for Cider is built with **TypeScript, Vue, and Vite** and targets **Cider PluginKit v4**.
+
+The Cider plugin is intentionally separated from Spotify authentication:
+
+    ┌─────────────────────────────┐
+    │            Cider            │
+    │                             │
+    │  Current Apple Music track  │
+    └──────────────┬──────────────┘
+                   │ metadata only
+                   ▼
+    ┌─────────────────────────────┐
+    │     Managed Canvas API      │
+    │          Vercel             │
+    │                             │
+    │  Server-side Spotify auth   │
+    │  Track matching             │
+    │  Canvas retrieval           │
+    └──────────────┬──────────────┘
+                   │ Canvas MP4 URL
+                   ▼
+    ┌─────────────────────────────┐
+    │      Canvas for Cider       │
+    │                             │
+    │  Persistent portal          │
+    │  Lyrics / Navigation / Mini │
+    └─────────────────────────────┘
+
+### Repository layout
+
+    Canvas for Cider/
+    ├── public/
+    │   ├── icon.png
+    │   ├── logo.png
+    │   └── logo.svg
+    ├── src/
+    │   ├── assets/
+    │   │   └── logo.svg
+    │   ├── components/
+    │   │   ├── CanvasSettingsPanel.vue
+    │   │   ├── LyricsCanvasButton.vue
+    │   │   ├── LyricCanvas.vue
+    │   │   ├── Overlay.vue
+    │   │   ├── QuickSettings.vue
+    │   │   └── Settings.vue
+    │   ├── core/
+    │   │   └── currentTrack.ts
+    │   ├── boot.ts
+    │   ├── canvas-api.ts
+    │   ├── cider.ts
+    │   ├── config.ts
+    │   ├── main.ts
+    │   ├── plugin.config.ts
+    │   ├── search-plan.ts
+    │   └── state.ts
+    ├── scripts/
+    │   ├── pack.mjs
+    │   └── sanity.mjs
+    ├── BITCHORD-NOTICE.txt
+    ├── GPL-3.0.txt
+    ├── index.html
+    ├── package.json
+    ├── tsconfig.app.json
+    ├── tsconfig.json
+    └── vite.config.ts
+
+### Important source files
+
+| File | Purpose |
+| --- | --- |
+| <code>src/main.ts</code> | Plugin entry point and custom-element registration |
+| <code>src/components/Overlay.vue</code> | Current-track detection, Canvas lookup, caching, and request lifecycle |
+| <code>src/components/LyricCanvas.vue</code> | Persistent Canvas portal, placement detection, positioning, layering, and playback recovery |
+| <code>src/components/LyricsCanvasButton.vue</code> | Adds the Canvas quick-settings button beside Lyrics |
+| <code>src/components/CanvasSettingsPanel.vue</code> | Placement settings |
+| <code>src/components/QuickSettings.vue</code> | Quick-settings popup |
+| <code>src/components/Settings.vue</code> | Main plugin settings screen |
+| <code>src/canvas-api.ts</code> | Client for the managed Canvas API |
+| <code>src/core/currentTrack.ts</code> | Extracts current Cider/Apple Music metadata |
+| <code>src/config.ts</code> | Placement configuration and persistence |
+| <code>src/plugin.config.ts</code> | Cider PluginKit metadata |
+| <code>vite.config.ts</code> | Vite build and development-server configuration |
+
+---
+
+## 🔧 Local development
 
 ### Requirements
 
-- Node.js **20.19+**
-- npm
-- Cider with PluginKit v4 support
+- **Node.js 20.19+**
+- **npm**
+- A Cider installation with PluginKit v4 support
 
 ### Install
 
-```bash
-npm install
-```
+    npm install
 
 ### Start the development server
 
-```bash
-npm run dev
-```
+    npm run dev
 
-Development uses Vite on:
+The development server runs on:
 
-```text
-127.0.0.1:3058
-```
+    127.0.0.1:3058
 
-The Vite development server only serves the plugin during development. It is not the Spotify Canvas backend.
+This local Vite server is for developing the **Cider plugin**. It is **not** the Spotify Canvas backend.
 
 ### Type-check
 
-```bash
-npm run check
-```
+    npm run check
 
-### Production build
+### Build
 
-```bash
-npm run build
-```
+    npm run build
 
 ### Package
 
-```bash
-npm run pack
-```
+    npm run pack
 
 ### Sanity checks
 
-```bash
-npm run sanity
-```
+    npm run sanity
 
-## Diagnostics
+---
 
-The browser console logs the current track identity, Canvas API requests, match results, and Canvas attachment lifecycle. Real Spotify session values are never intentionally logged by the plugin.
+## 🔍 Diagnostics
 
-## Architecture
+The plugin writes useful lifecycle information to the browser console, including:
 
-```text
-Cider
-  │
-  │ track metadata only
-  ▼
-Managed Canvas API
-  │
-  │ server-side Spotify session
-  ▼
-Spotify internal search + Canvas
-  │
-  │ Canvas MP4 URL
-  ▼
-Cider Canvas portal
-```
+- Current track identity
+- Canvas API requests
+- Spotify match results
+- Canvas URL availability
+- Portal placement and attachment
+- Track-change cancellation
+- Canvas playback recovery
 
-## Credits and notices
+Example log sequence:
 
-The backend authentication design is based on the BitChord approach of using a real Spotify Web Player session with an `sp_dc` cookie and capturing the logged-in token Spotify issues to that session. The Cider plugin does not contain the user's Spotify credential.
+    [Canvas for Cider] Player track identity ...
+    [Canvas for Cider] Canvas API resolver starting ...
+    [Canvas for Cider] Canvas URL received from API ...
 
-Spotify's internal Canvas services are not a stable public API and may change independently of this project.
+Real Spotify session credentials are not intentionally logged by the plugin.
 
-## License
+---
 
-This project is distributed under the license included in `GPL-3.0.txt`.
+## 🌐 Managed Canvas API
+
+The plugin’s production resolver is hosted at:
+
+    https://spotify-canvas-for-cider-api.vercel.app
+
+Primary endpoint:
+
+    POST /api/resolve-canvas
+
+The endpoint accepts track metadata and returns the matched Spotify track information plus a Canvas URL when one is available.
+
+The backend project lives in:
+
+https://github.com/palabok13418/Spotify-Canvas-for-Cider-API
+
+---
+
+## 🧩 Design principles
+
+1. **Keep Spotify credentials off the client.**
+2. **Keep the Canvas portal owned by the plugin**, rather than permanently attaching it to Cider’s disposable UI nodes.
+3. **Use live geometry** when positioning the Canvas so it follows Cider’s current layout.
+4. **Cancel stale lookups** when the current song changes.
+5. **Cache successful Canvas results** to avoid unnecessary repeat work.
+6. **Keep Canvas non-interactive** so Cider controls continue working normally.
+7. **Prefer resilient DOM detection** over depending on one fragile selector.
+8. **Keep diagnostic behavior out of the normal user-facing UI.**
+
+---
+
+## ⚠️ Limitations
+
+Canvas retrieval currently depends on Spotify services that are **not a stable public Canvas API**.
+
+That means Spotify can change:
+
+- Internal endpoints
+- Response formats
+- Authentication behavior
+- Track-search behavior
+- Canvas availability
+
+A working Canvas result is therefore not guaranteed for every song.
+
+The plugin also requires an active network connection to contact the managed Canvas API.
+
+---
+
+## 📜 Credits & notices
+
+The backend authentication approach is based on the **BitChord** approach for working with a Spotify Web Player session. See <code>BITCHORD-NOTICE.txt</code> for the applicable project notice and attribution.
+
+The Cider plugin itself does not contain the server’s Spotify session credential.
+
+---
+
+## 📄 License
+
+This project is distributed under the **GNU General Public License v3.0**.
+
+See [GPL-3.0.txt](GPL-3.0.txt) for the full license text.
+
+<p align="center"><sub>Canvas for Cider · Cider PluginKit v4 · TypeScript · Vue · Vite</sub></p>

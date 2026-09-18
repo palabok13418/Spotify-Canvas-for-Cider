@@ -306,7 +306,7 @@ That means Spotify can change:
 - Track-search behavior
 - Canvas availability
 
-A working Canvas result is therefore not guaranteed for every song.
+Some songs simply won't have a Canvas, and Spotify can also change the behavior this project relies on.
 
 The plugin also requires an active network connection to contact the managed Canvas API.
 

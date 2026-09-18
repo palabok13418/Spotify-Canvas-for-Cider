@@ -16,6 +16,10 @@
   <a href='https://github.com/palabok13418/Spotify-Canvas-for-Cider-API'>Canvas API</a>
 </p>
 
+<div align="center">
+  <font color="red"><strong>🔴 Active Bug: Canvas video is currently not appearing in the Mini Player.</strong></font>
+</div>
+
 ---
 
 ## What is Canvas for Cider?

@@ -18,21 +18,6 @@ async function saveTransparency() {
   }
 }
 
-function updateTransparency(event: Event) {
-  const input = event.target as HTMLInputElement | null;
-  if (!input) return;
-  const value = Number(input.value);
-  cfg.transparency = Number.isFinite(value) ? Math.max(0, Math.min(100, value)) : 50;
-}
-
-async function saveTransparency() {
-  try {
-    await persistConfig();
-  } catch (error) {
-    console.error("[Canvas for Cider] Failed to save Canvas transparency", error);
-  }
-}
-
 async function selectPlacement(value: CanvasPlacement) {
   cfg.placement = value;
   try {
@@ -64,28 +49,6 @@ async function selectPlacement(value: CanvasPlacement) {
         >
           {{ option[1] }}
         </button>
-      </div>
-    </div>
-
-    <div class="field">
-      <div class="field-heading">
-        <span>Canvas transparency</span>
-        <span class="value">{{ cfg.transparency }}%</span>
-      </div>
-      <input
-        class="transparency-slider"
-        type="range"
-        min="0"
-        max="100"
-        step="1"
-        :value="cfg.transparency"
-        aria-label="Canvas transparency"
-        @input="updateTransparency"
-        @change="saveTransparency"
-      />
-      <div class="range-hint">
-        <span>Visible</span>
-        <span>Transparent</span>
       </div>
     </div>
 

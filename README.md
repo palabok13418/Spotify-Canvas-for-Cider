@@ -293,7 +293,15 @@ The **Cider logo used as part of the Canvas for Cider plugin logo** is credited 
 
 ### BitChord
 
-The backend Spotify Web Player authentication approach is based on the **BitChord** project. The repository includes `BITCHORD-NOTICE.txt` with the relevant notice and attribution.
+The backend Spotify Web Player authentication approach is based on the **[BitChord](https://github.com/kushagrasinghx/BitChord)** project. The repository includes `BITCHORD-NOTICE.txt` with the relevant notice and attribution.
+
+### Original Canvas API idea
+
+The original idea and early direction for fetching Spotify Canvas data came from **[Paxsenix0/Spotify-Canvas-API](https://github.com/Paxsenix0/Spotify-Canvas-API)**.
+
+### Development
+
+A lot of the coding, debugging, and README work for this project was done with **[ChatGPT](https://chatgpt.com/)** by OpenAI.
 
 ### Cider
 

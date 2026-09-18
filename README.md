@@ -63,6 +63,7 @@ A few of the things the plugin currently handles:
 - 🛑 Cancellation of stale Canvas lookups
 - 🌫️ Fading and blending so the video doesn't get in the way
 - 🎚️ A Canvas transparency slider, from fully visible to fully transparent
+- 🎚️ A Canvas transparency slider, from fully visible to fully transparent
 - 🖱️ A non-interactive Canvas layer so normal Cider controls still work
 - ♿ Reduced-motion support
 - ⚙️ Quick placement settings from the Lyrics area
@@ -113,6 +114,10 @@ Choose:
 **Lyrics** · **Navigation** · **Mini Player**
 
 The selection is saved through Cider's plugin configuration.
+
+### Canvas transparency
+
+Use the transparency slider to control how visible the Canvas is. **0%** keeps the Canvas fully visible, while **100%** makes it fully transparent. The change is applied live while you drag the slider and saved when you release it.
 
 ### Canvas transparency
 

@@ -82,6 +82,7 @@ let syncRunning = false;
 let pendingSync = false;
 
 const reducedMotion = computed(() => Boolean(reducedMotionQuery?.matches));
+const canvasOpacity = computed(() => 1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100);
 
 function log(...args: unknown[]) {
   console.log(PREFIX, ...args);
@@ -476,6 +477,7 @@ function setPortalRectangle(host: HTMLElement) {
   portalLayer.style.setProperty("display", "block", "important");
   portalLayer.style.setProperty("pointer-events", "none", "important");
   portalLayer.style.setProperty("background", "transparent", "important");
+  portalLayer.style.setProperty("opacity", String(canvasOpacity.value), "important");
 
   const signature = [
     describe(host),
@@ -683,7 +685,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="layer" aria-hidden="true">
+  <div class="layer" aria-hidden="true" :style="{ opacity: canvasOpacity }">
     <video
       class="video"
       :src="canvasUrl || undefined"
@@ -729,7 +731,8 @@ canvascider-main-canvas{
   pointer-events:none;
   z-index:0;
   background:transparent;
-  opacity:.50;
+  opacity:1;
+  transition:opacity 120ms ease;
 }
 .video{
   position:absolute;

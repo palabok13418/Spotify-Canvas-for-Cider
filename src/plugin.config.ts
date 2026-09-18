@@ -3,7 +3,7 @@ export default {
   identifier: "community.palabok13418.canvas-for-cider",
   name: "Canvas for Cider",
   description: "Shows Spotify Canvas using the managed Canvas API with selectable Lyrics, Navigation, or Mini Player placement.",
-  version: "2.7.1",
+  version: "2.0.0",
   author: "palabok13418",
   repo: "https://github.com/ciderapp/plugin-template",
   pluginKitVersion: "4",

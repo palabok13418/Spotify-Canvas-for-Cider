@@ -16,11 +16,6 @@ async function selectPlacement(value: CanvasPlacement) {
 <template>
   <div class="panel">
     <div class="field">
-      <span>Canvas source</span>
-      <small class="muted">Canvas for Cider uses the managed Spotify Canvas API. No Spotify token is required in Cider.</small>
-    </div>
-
-    <div class="field">
       <span>Canvas placement</span>
       <div class="placement-grid" role="radiogroup" aria-label="Canvas placement">
         <button
@@ -48,7 +43,6 @@ async function selectPlacement(value: CanvasPlacement) {
 .panel{display:grid;gap:18px}
 .field{display:grid;gap:8px}
 .field>span{font-weight:650}
-.muted{opacity:.62;line-height:1.45}
 .placement-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
 .placement-option{border:1px solid color-mix(in srgb,currentColor 18%,transparent);background:color-mix(in srgb,currentColor 7%,transparent);color:inherit;border-radius:11px;padding:10px 14px;min-height:42px;font:inherit;font-weight:650;cursor:pointer}
 .placement-option:hover{background:color-mix(in srgb,currentColor 12%,transparent)}

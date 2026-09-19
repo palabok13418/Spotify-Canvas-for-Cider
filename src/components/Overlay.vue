@@ -132,12 +132,12 @@ async function analyzeAndActivate(
   if (!result.canvasUrl) return;
 
   const cachedDecision = analysisCache.get(identity);
-  if (cachedDecision !== undefined) {
+  if (cachedDecision === true) {
     canvasAnalysisPending.value = false;
-    canvasSuppressedForAppleArtwork.value = cachedDecision;
+    canvasSuppressedForAppleArtwork.value = true;
     canvasTransitioning.value = false;
-    canvasActive.value = !cachedDecision;
-    if (cachedDecision) canvasUrl.value = result.canvasUrl;
+    canvasActive.value = false;
+    canvasUrl.value = result.canvasUrl;
     return;
   }
 
@@ -160,7 +160,8 @@ async function analyzeAndActivate(
   if (signal.aborted || expectedSequence !== sequence || identity !== activeTrackIdentity) return;
 
   canvasAnalysisPending.value = false;
-  analysisCache.set(identity, analysis.duplicate);
+  if (analysis.duplicate) analysisCache.set(identity, true);
+  else analysisCache.delete(identity);
 
   canvasSuppressedForAppleArtwork.value = analysis.duplicate;
   canvasTransitioning.value = false;

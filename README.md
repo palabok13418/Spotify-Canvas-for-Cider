@@ -19,9 +19,6 @@
 
 
 ---
-<div align="center">
-  <font color="red"><strong>🔴 Active Bug: Canvas video is currently not appearing in the Mini Player.</strong></font>
-</div>
 
 ## What is Canvas for Cider?
 
@@ -35,7 +32,7 @@ You can put it in three places:
 | --- | --- |
 | **Lyrics** | Shows Canvas behind the Lyrics area |
 | **Navigation** | Uses the left navigation area |
-| **Mini Player** | Places Canvas around the Mini Player |
+| **Immersive (One)** | Places Canvas on the artwork surface of Cider's One Immersive layout |
 
 The plugin follows the track currently playing in Cider, looks for a matching Spotify track, and loads its Canvas when one is available.
 
@@ -56,13 +53,16 @@ A few of the things the plugin currently handles:
 - 🎬 Spotify Canvas MP4 playback inside Cider
 - 📝 Lyrics placement
 - 🧭 Navigation placement
-- 🎛️ Mini Player placement
+- 🖼️ Immersive (One) placement
+- ✨ Animated Canvas reveals, transitions, and Immersive spin transitions
+- 🧠 Apple Music animated-artwork duplicate detection so an identical Canvas is suppressed
 - 🔄 A persistent Canvas layer that survives Cider UI changes
 - ⚡ Automatic track-change detection
 - 🧠 Successful-result caching
 - 🛑 Cancellation of stale Canvas lookups
 - 🌫️ Fading and blending so the video doesn't get in the way
 - 🎚️ A Canvas transparency slider, from fully visible to fully transparent
+- 🌈 Lyrics-side ambiance and four-sided Immersive edge blending
 - 🖱️ A non-interactive Canvas layer so normal Cider controls still work
 - ♿ Reduced-motion support
 - ⚙️ Quick placement settings from the Lyrics area
@@ -110,7 +110,9 @@ There isn't a huge settings page. The main choice is simply where you want Canva
 
 Choose:
 
-**Lyrics** · **Navigation** · **Mini Player**
+**Lyrics** · **Navigation** · **Immersive (One)**
+
+Immersive placement is deliberately limited to Cider's **One** artwork layout. It does not attempt to inject Canvas into Cider's other Immersive layouts.
 
 The selection is saved through Cider's plugin configuration.
 
@@ -152,7 +154,7 @@ The main architectural split is intentional: the Cider plugin handles the UI and
 ┌─────────────────────────────┐
 │      Canvas for Cider       │
 │                             │
-│  Lyrics / Navigation / Mini │
+│  Lyrics / Navigation / Immersive │
 └─────────────────────────────┘
 ~~~
 
@@ -202,7 +204,8 @@ Canvas for Cider/
 | --- | --- |
 | `src/main.ts` | Plugin entry point and registration |
 | `src/components/Overlay.vue` | Track detection, Canvas lookup, caching, and request lifecycle |
-| `src/components/LyricCanvas.vue` | Canvas portal, placement detection, positioning, layering, and playback recovery |
+| `src/components/LyricCanvas.vue` | Canvas portal, Lyrics/Navigation/Immersive placement, animations, blending, and playback recovery |
+| `src/artwork-analysis.ts` | Detects matching Apple Music animated artwork before Canvas is shown |
 | `src/components/LyricsCanvasButton.vue` | Adds the Canvas button beside Lyrics |
 | `src/components/CanvasSettingsPanel.vue` | Placement settings |
 | `src/components/QuickSettings.vue` | Quick-settings popup |
@@ -262,6 +265,14 @@ Depending on what you're debugging, you may see messages about the current track
 The plugin does not intentionally log the server's Spotify session credential.
 
 ---
+
+## 🌐 Hosted Canvas API
+
+### Cross-language and punctuation matching
+
+The resolver uses multiple search forms rather than trusting the Apple Music title literally. Exact ISRC matching is attempted first when available, followed by sanitized title/artist queries and metadata-only fallbacks using artist, album, duration, and track position. This lets cases such as a Latin-script title like `KYUBI` and a Spotify title in another script such as `九尾` still resolve when the surrounding track metadata agrees.
+
+Search input is also sanitized for punctuation and operator-like characters such as `-=[]\\;',./`~!@#The production API is:*()_+{}|:"><?` so those characters do not poison the Spotify search query.
 
 ## 🌐 Hosted Canvas API
 

@@ -3,7 +3,6 @@ import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { canvasActive, canvasTransitioning, canvasUrl } from "../state";
 import { useConfig } from "../config";
 import { subscribeEvent } from "../cider";
-import { subscribeEvent } from "../cider";
 
 withDefaults(defineProps<{ mode?: "main" }>(), { mode: "main" });
 const cfg = useConfig();
@@ -58,7 +57,6 @@ let resizeObserver: ResizeObserver | null = null;
 let retryTimer: number | null = null;
 let animationFrame: number | null = null;
 let playbackWatchdog: number | null = null;
-let reducedMotionQuery: MediaQueryList | null = null;
 let removePlaybackGuard: (() => void) | null = null;
 let guardedVideo: HTMLVideoElement | null = null;
 let latchUrl = "";
@@ -919,7 +917,7 @@ onUnmounted(() => {
   resizeObserver?.disconnect();
   clearPlaybackGuard();
   if (playbackWatchdog !== null) window.clearInterval(playbackWatchdog);
-  reducedMotionQuery?.removeEventListener?.("change", handleMotionChange);
+  reducedMotionQuery.value?.removeEventListener?.("change", handleMotionChange);
   if (animationTimer !== null) window.clearTimeout(animationTimer);
   immersiveEventCleanup.forEach(fn => fn());
   immersiveEventCleanup = [];

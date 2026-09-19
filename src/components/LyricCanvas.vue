@@ -4,8 +4,8 @@ import { canvasActive, canvasTransitioning, canvasUrl } from "../state";
 import { useConfig } from "../config";
 
 withDefaults(defineProps<{ mode?: "main" }>(), { mode: "main" });
-const cfg = useConfig();
 
+const cfg = useConfig();
 const PREFIX = "[Canvas for Cider]";
 
 const RIGHT_DRAWER_SCOPE = [
@@ -64,8 +64,10 @@ const canvasOpacity = computed(() =>
   1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100
 );
 const renderable = computed(() =>
-  Boolean((canvasActive.value || canvasTransitioning.value) &&
-    (currentRenderUrl.value || incomingRenderUrl.value))
+  Boolean(
+    (canvasActive.value || canvasTransitioning.value) &&
+    (currentRenderUrl.value || incomingRenderUrl.value)
+  )
 );
 
 function log(...args: unknown[]) {
@@ -199,12 +201,12 @@ function findNavigationHost(): HTMLElement | null {
 
 function findPlacementHost() {
   if (cfg.placement === "navigation") return findNavigationHost();
-  if (cfg.placement === "immersive") return null;
   return findRightLyricsHost();
 }
 
 function syncNavigationContrast(host: HTMLElement | null) {
   const marked = document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast");
+
   for (const el of marked) {
     if (cfg.placement !== "navigation" || el !== host) {
       el.classList.remove("canvascider-navigation-contrast");
@@ -222,7 +224,9 @@ function getPortalZIndex(host: HTMLElement) {
 
   for (let depth = 0; node && depth < 8; depth++) {
     const z = Number.parseInt(getComputedStyle(node).zIndex, 10);
-    if (Number.isFinite(z)) best = Math.max(best, Math.min(z + 1, 9999));
+    if (Number.isFinite(z)) {
+      best = Math.max(best, Math.min(z + 1, 9999));
+    }
     node = node.parentElement;
   }
 
@@ -261,8 +265,8 @@ async function playVideo(video: HTMLVideoElement | null) {
 
 async function syncVideoElements() {
   await nextTick();
-
   if (!rootEl) return;
+
   currentVideoEl = rootEl.querySelector<HTMLVideoElement>(".current-video");
   incomingVideoEl = rootEl.querySelector<HTMLVideoElement>(".incoming-video");
 
@@ -270,29 +274,26 @@ async function syncVideoElements() {
   void playVideo(incomingVideoEl);
 }
 
-function beginInitialAnimation() {
-  void nextTick().then(() => {
-    void syncVideoElements();
-    setPhase("entering", 820);
-  });
-}
-
 function beginCanvasSwitch(url: string) {
+  if (!url) return;
+
   if (!currentRenderUrl.value) {
     currentRenderUrl.value = url;
     incomingRenderUrl.value = "";
     lastRenderedUrl = url;
-    beginInitialAnimation();
+    void nextTick().then(() => {
+      void syncVideoElements();
+      setPhase("entering", 820);
+    });
     return;
   }
 
   if (currentRenderUrl.value === url && !incomingRenderUrl.value) return;
-
   if (incomingRenderUrl.value === url) return;
 
   clearAnimationTimer();
   incomingRenderUrl.value = url;
-  phase.value = "switching";
+  setPhase("switching", 780);
 
   void nextTick().then(() => {
     void syncVideoElements();
@@ -322,24 +323,28 @@ function clearRenderedCanvas() {
 }
 
 function syncRenderState() {
-  const url = canvasUrl.value;
-
-  if (url && canvasActive.value) {
-    if (url !== lastRenderedUrl || currentRenderUrl.value !== url) {
-      beginCanvasSwitch(url);
+  if (canvasUrl.value && canvasActive.value) {
+    if (canvasUrl.value !== lastRenderedUrl || currentRenderUrl.value !== canvasUrl.value) {
+      beginCanvasSwitch(canvasUrl.value);
     }
     return;
   }
 
-  // During lookup/analysis, keep the previous Canvas visible. The new one will
-  // enter through beginCanvasSwitch() once the resolver activates it.
-  if (!url && !canvasActive.value && !canvasTransitioning.value) {
+  // During lookup/analysis the last rendered Canvas remains untouched.
+  if (!canvasUrl.value && !canvasTransitioning.value && !canvasActive.value) {
     clearRenderedCanvas();
   }
 }
 
 function scheduleSync(reason: string) {
-  if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) || reducedMotion.value) return;
+  if (
+    !canvasUrl.value ||
+    (!canvasActive.value && !canvasTransitioning.value) ||
+    reducedMotion.value ||
+    cfg.placement === "immersive"
+  ) {
+    return;
+  }
 
   pendingSync = true;
   if (animationFrame !== null) return;
@@ -353,7 +358,10 @@ function scheduleSync(reason: string) {
 }
 
 function ensurePortalRoot() {
-  if (!rootEl) rootEl = document.querySelector<HTMLElement>("canvascider-main-canvas");
+  if (!rootEl) {
+    rootEl = document.querySelector<HTMLElement>("canvascider-main-canvas");
+  }
+
   if (!rootEl) return false;
 
   if (rootEl.parentElement !== document.body) {
@@ -405,6 +413,7 @@ function setPortalRectangle(host: HTMLElement) {
     Math.round(r.top),
     Math.round(r.width),
     Math.round(r.height),
+    cfg.placement,
   ].join("|");
 
   if (signature !== lastRectSignature || lastTargetHost !== host) {
@@ -424,6 +433,7 @@ function setPortalRectangle(host: HTMLElement) {
 
 async function syncToTarget(reason: string) {
   if (syncRunning || reducedMotion.value || !ensurePortalRoot()) return;
+
   syncRunning = true;
 
   try {
@@ -435,12 +445,14 @@ async function syncToTarget(reason: string) {
     }
 
     const host = findPlacementHost();
+
     if (!host || !setPortalRectangle(host)) {
       rootEl.style.setProperty("display", "none", "important");
       return;
     }
 
     await syncVideoElements();
+
     if (canvasActive.value) {
       await playVideo(currentVideoEl);
       await playVideo(incomingVideoEl);
@@ -463,8 +475,12 @@ function startPersistentLatch() {
   clearLatch();
 
   const tick = () => {
-    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) ||
-        reducedMotion.value || cfg.placement === "immersive") {
+    if (
+      !canvasUrl.value ||
+      (!canvasActive.value && !canvasTransitioning.value) ||
+      reducedMotion.value ||
+      cfg.placement === "immersive"
+    ) {
       return;
     }
 
@@ -496,15 +512,15 @@ watch(
     }
 
     if (url && active) {
-      if (url !== oldUrl || (!oldActive && active)) beginCanvasSwitch(url);
+      if (url !== oldUrl || (!oldActive && active)) {
+        beginCanvasSwitch(url);
+      }
       startPersistentLatch();
       scheduleSync("Canvas state changed");
       return;
     }
 
     if (url && transitioning) {
-      // Keep the previous rendered Canvas stable while a replacement is being
-      // resolved. Do not apply ambience to or animate the whole video here.
       startPersistentLatch();
       scheduleSync("Canvas replacement pending");
       return;
@@ -549,15 +565,29 @@ onMounted(() => {
   reducedMotionQuery.value.addEventListener?.("change", handleMotionChange);
 
   observer = new MutationObserver(() => {
-    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) ||
-        reducedMotion.value || cfg.placement === "immersive") return;
+    if (
+      !canvasUrl.value ||
+      (!canvasActive.value && !canvasTransitioning.value) ||
+      reducedMotion.value ||
+      cfg.placement === "immersive"
+    ) {
+      return;
+    }
+
     scheduleSync("Cider DOM changed");
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   resizeObserver = new ResizeObserver(() => {
-    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) ||
-        reducedMotion.value || cfg.placement === "immersive") return;
+    if (
+      !canvasUrl.value ||
+      (!canvasActive.value && !canvasTransitioning.value) ||
+      reducedMotion.value ||
+      cfg.placement === "immersive"
+    ) {
+      return;
+    }
+
     scheduleSync("Canvas target resized");
   });
 
@@ -568,8 +598,14 @@ onMounted(() => {
   window.addEventListener("scroll", () => scheduleSync("window scrolled"), true);
 
   playbackWatchdog = window.setInterval(() => {
-    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) ||
-        reducedMotion.value || cfg.placement === "immersive") return;
+    if (
+      !canvasUrl.value ||
+      (!canvasActive.value && !canvasTransitioning.value) ||
+      reducedMotion.value ||
+      cfg.placement === "immersive"
+    ) {
+      return;
+    }
 
     scheduleSync("Canvas watchdog");
     void syncVideoElements();
@@ -580,9 +616,13 @@ onMounted(() => {
     void playVideo(video);
 
     const now = Date.now();
+
     if (!video.paused && !video.ended) {
-      if (Math.abs(video.currentTime - lastPlaybackTime) < 0.01) stalledChecks++;
-      else stalledChecks = 0;
+      if (Math.abs(video.currentTime - lastPlaybackTime) < 0.01) {
+        stalledChecks++;
+      } else {
+        stalledChecks = 0;
+      }
 
       lastPlaybackTime = video.currentTime;
 
@@ -596,8 +636,12 @@ onMounted(() => {
     }
   }, 1000);
 
-  if (canvasUrl.value && (canvasActive.value || canvasTransitioning.value) &&
-      !reducedMotion.value && cfg.placement !== "immersive") {
+  if (
+    canvasUrl.value &&
+    (canvasActive.value || canvasTransitioning.value) &&
+    !reducedMotion.value &&
+    cfg.placement !== "immersive"
+  ) {
     beginCanvasSwitch(canvasUrl.value);
     startPersistentLatch();
     scheduleSync("initial mount");
@@ -632,12 +676,12 @@ onUnmounted(() => {
   <div
     class="canvas-shell"
     :class="[phase, cfg.placement, { visible: renderable }]"
-    :style="{ opacity: canvasOpacity }"
+    :style="{ opacity: renderable ? canvasOpacity : 0 }"
     aria-hidden="true"
   >
-    <!-- Lyrics ambience is ONLY the blurred copy living to the left of the
-         Canvas rectangle. The main Canvas video itself has no blend mode. -->
-    <div v-if="cfg.placement === 'lyrics'" class="ambient ambient-left">
+    <!-- Lyrics ambience is a separate blurred copy that lives strictly to the
+         LEFT of the Canvas rectangle. The main Canvas is never blended. -->
+    <div v-if="cfg.placement === 'lyrics'" class="ambient-left">
       <video
         class="ambient-video"
         :src="currentRenderUrl || undefined"
@@ -645,31 +689,34 @@ onUnmounted(() => {
         loop
         playsinline
         preload="auto"
+        :autoplay="!reducedMotion"
       ></video>
     </div>
 
     <div class="stage">
-      <video
-        v-if="currentRenderUrl"
-        class="canvas-video current-video"
-        :src="currentRenderUrl"
-        muted
-        loop
-        playsinline
-        preload="auto"
-        :autoplay="!reducedMotion"
-      ></video>
+      <div v-if="currentRenderUrl" class="canvas-frame current-frame">
+        <video
+          class="canvas-video current-video"
+          :src="currentRenderUrl"
+          muted
+          loop
+          playsinline
+          preload="auto"
+          :autoplay="!reducedMotion"
+        ></video>
+      </div>
 
-      <video
-        v-if="incomingRenderUrl"
-        class="canvas-video incoming-video"
-        :src="incomingRenderUrl"
-        muted
-        loop
-        playsinline
-        preload="auto"
-        :autoplay="!reducedMotion"
-      ></video>
+      <div v-if="incomingRenderUrl" class="canvas-frame incoming-frame">
+        <video
+          class="canvas-video incoming-video"
+          :src="incomingRenderUrl"
+          muted
+          loop
+          playsinline
+          preload="auto"
+          :autoplay="!reducedMotion"
+        ></video>
+      </div>
     </div>
   </div>
 </template>
@@ -700,18 +747,21 @@ canvascider-main-canvas{
   overflow:visible;
   pointer-events:none;
   isolation:isolate;
-  opacity:0;
-  transition:opacity 180ms ease;
 }
-
-.canvas-shell.visible{opacity:1}
 
 .stage{
   position:absolute;
   inset:0;
   overflow:hidden;
   pointer-events:none;
-  z-index:2;
+}
+
+.canvas-frame{
+  position:absolute;
+  inset:0;
+  overflow:hidden;
+  pointer-events:none;
+  background:transparent;
 }
 
 .canvas-video{
@@ -719,6 +769,7 @@ canvascider-main-canvas{
   inset:0;
   width:100%;
   height:100%;
+  display:block;
   object-fit:cover;
   object-position:center;
   max-width:none;
@@ -730,121 +781,119 @@ canvascider-main-canvas{
   user-select:none;
   background:transparent;
   filter:saturate(.90) contrast(1.02) brightness(.78);
-  will-change:clip-path,transform,opacity,filter;
 }
 
+.current-frame{z-index:2}
+.incoming-frame{z-index:3}
 .current-video{opacity:1}
-.incoming-video{opacity:0}
-
-.ambient{
-  position:absolute;
-  pointer-events:none;
-  overflow:hidden;
-  z-index:1;
-}
+.incoming-video{opacity:1}
 
 .ambient-left{
-  left:-55%;
+  position:absolute;
+  right:100%;
   top:4%;
-  width:75%;
+  width:58%;
   height:92%;
   overflow:hidden;
-  opacity:.30;
-  clip-path:polygon(0 0,85% 0,68% 50%,85% 100%,0 100%);
+  pointer-events:none;
+  z-index:1;
+  opacity:.28;
   -webkit-mask-image:linear-gradient(
     to right,
     transparent 0%,
-    rgba(0,0,0,.20) 42%,
-    #000 68%,
-    rgba(0,0,0,.05) 92%,
+    rgba(0,0,0,.06) 18%,
+    rgba(0,0,0,.36) 58%,
+    #000 92%,
     transparent 100%
   );
   mask-image:linear-gradient(
     to right,
     transparent 0%,
-    rgba(0,0,0,.20) 42%,
-    #000 68%,
-    rgba(0,0,0,.05) 92%,
+    rgba(0,0,0,.06) 18%,
+    rgba(0,0,0,.36) 58%,
+    #000 92%,
     transparent 100%
   );
 }
 
 .ambient-video{
   position:absolute;
-  inset:-12%;
-  width:124%;
-  height:124%;
+  inset:-14%;
+  width:128%;
+  height:128%;
   object-fit:cover;
-  filter:blur(36px) saturate(1.25) brightness(.62);
-  transform:scale(1.07);
+  object-position:center;
+  filter:blur(42px) saturate(1.20) brightness(.60);
+  transform:scale(1.08);
   pointer-events:none;
 }
 
 @keyframes canvas-star-open{
   0%{
-    clip-path:polygon(50% 42%,52% 49%,75% 50%,52% 51%,50% 58%,48% 51%,25% 50%,48% 49%);
-    transform:scale(.72);
-    opacity:.08;
-    filter:blur(8px) saturate(.84) brightness(.70);
+    clip-path:polygon(
+      50% 42%,52% 49%,75% 50%,52% 51%,
+      50% 58%,48% 51%,25% 50%,48% 49%
+    );
+    opacity:0;
   }
-  25%{
-    clip-path:polygon(50% 24%,54% 47%,78% 50%,54% 53%,50% 76%,46% 53%,22% 50%,46% 47%);
-    transform:scale(.90);
+  28%{
+    clip-path:polygon(
+      50% 24%,54% 47%,78% 50%,54% 53%,
+      50% 76%,46% 53%,22% 50%,46% 47%
+    );
     opacity:.48;
-    filter:blur(3px) saturate(.88) brightness(.74);
   }
-  56%{
-    clip-path:polygon(50% 4%,55% 45%,96% 50%,55% 55%,50% 96%,45% 55%,4% 50%,45% 45%);
-    transform:scale(1.012);
-    opacity:.92;
-    filter:blur(.7px) saturate(.90) brightness(.77);
+  58%{
+    clip-path:polygon(
+      50% 4%,55% 45%,96% 50%,55% 55%,
+      50% 96%,45% 55%,4% 50%,45% 45%
+    );
+    opacity:.90;
   }
   100%{
     clip-path:inset(0 0 0 0 round 0);
-    transform:scale(1);
     opacity:1;
-    filter:saturate(.90) contrast(1.02) brightness(.78);
   }
 }
 
 @keyframes canvas-switch-in{
   0%{
-    clip-path:polygon(50% 42%,52% 49%,75% 50%,52% 51%,50% 58%,48% 51%,25% 50%,48% 49%);
-    transform:scale(1.025);
+    clip-path:polygon(
+      50% 42%,52% 49%,75% 50%,52% 51%,
+      50% 58%,48% 51%,25% 50%,48% 49%
+    );
     opacity:0;
-    filter:blur(9px) saturate(.84) brightness(.72);
   }
   38%{
-    clip-path:polygon(50% 21%,54% 46%,82% 50%,54% 54%,50% 79%,46% 54%,18% 50%,46% 46%);
-    transform:scale(1.008);
-    opacity:.54;
-    filter:blur(3px) saturate(.88) brightness(.75);
+    clip-path:polygon(
+      50% 21%,54% 46%,82% 50%,54% 54%,
+      50% 79%,46% 54%,18% 50%,46% 46%
+    );
+    opacity:.56;
   }
   100%{
     clip-path:inset(0 0 0 0 round 0);
-    transform:scale(1);
     opacity:1;
-    filter:saturate(.90) contrast(1.02) brightness(.78);
   }
 }
 
 @keyframes canvas-switch-out{
-  0%{opacity:1;transform:scale(1);filter:saturate(.90) contrast(1.02) brightness(.78)}
-  52%{opacity:.48;transform:scale(1.016);filter:blur(2.4px) saturate(.88) brightness(.75)}
-  100%{opacity:0;transform:scale(1.032);filter:blur(8px) saturate(.84) brightness(.70)}
+  0%{opacity:1;filter:saturate(.90) contrast(1.02) brightness(.78)}
+  55%{opacity:.42;filter:blur(2px) saturate(.88) brightness(.75)}
+  100%{opacity:0;filter:blur(6px) saturate(.84) brightness(.70)}
 }
 
 @keyframes canvas-leave{
   0%{
     clip-path:inset(0 0 0 0 round 0);
     opacity:1;
-    transform:scale(1);
   }
   100%{
-    clip-path:polygon(50% 42%,52% 49%,75% 50%,52% 51%,50% 58%,48% 51%,25% 50%,48% 49%);
+    clip-path:polygon(
+      50% 42%,52% 49%,75% 50%,52% 51%,
+      50% 58%,48% 51%,25% 50%,48% 49%
+    );
     opacity:0;
-    transform:scale(.78);
-    filter:blur(6px);
   }
 }
 
@@ -854,7 +903,6 @@ canvascider-main-canvas{
 
 .canvas-shell.switching .incoming-video{
   animation:canvas-switch-in 780ms cubic-bezier(.18,.78,.20,1) both;
-  opacity:1;
 }
 
 .canvas-shell.switching .current-video{
@@ -866,8 +914,7 @@ canvascider-main-canvas{
 }
 
 @media (prefers-reduced-motion:reduce){
-  .canvas-shell,.canvas-video,.ambient{animation:none!important;transition:none!important}
+  .canvas-shell,.canvas-video,.ambient-left{animation:none!important;transition:none!important}
   .canvas-video{opacity:1!important;filter:saturate(.90) contrast(1.02) brightness(.78)!important}
-  .canvas-shell{opacity:1!important}
 }
 </style>

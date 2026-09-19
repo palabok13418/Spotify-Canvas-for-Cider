@@ -1,17 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, ref, watch } from "vue";
+import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { canvasActive, canvasTransitioning, canvasUrl } from "../state";
 import { useConfig } from "../config";
 import { subscribeEvent } from "../cider";
 
 withDefaults(defineProps<{ mode?: "main" }>(), { mode: "main" });
-const cfg = useConfig();
 
+const cfg = useConfig();
 const PREFIX = "[Canvas for Cider]";
 
-// The plugin now owns this canvas element permanently. Cider's Lyrics DOM is
-// treated as a moving visual target rather than the parent of our element.
-// This avoids Cider destroying the Canvas when its Lyrics component is rebuilt.
 const RIGHT_DRAWER_SCOPE = [
   '#app-viewport[right-drawer="true"]',
   '[right-drawer="true"]',
@@ -20,9 +17,6 @@ const RIGHT_DRAWER_SCOPE = [
 ];
 
 const LYRIC_SELECTORS = [
-  // Prefer the concrete Lyrics surface itself. Avoid broad lyric-view class
-  // matching because it can select a Cider wrapper whose rectangle is larger
-  // than the actual right-side Lyrics pane.
   ".lyric-view.apple-desktop-lyrics",
   ".lyric-view-wrapper .lyric-view",
   '[sfc-name="Lyrics"]',
@@ -30,79 +24,319 @@ const LYRIC_SELECTORS = [
   '[sfc-name="LyricsView"]',
 ];
 
-const LYRIC_CONTENT_SELECTORS = [
-  ".lyric-view-content",
-  '[class*="lyric-view-content"]',
-  '[sfc-name="LyricsContent"]',
-  '[sfc-name="LyricContent"]',
-];
-
 const NAVIGATION_SELECTORS = [
-  'cider-amsidebar',
-  'cider-amsidebar-min',
+  "cider-amsidebar",
+  "cider-amsidebar-min",
   '[sfc-name="AMSidebar"]',
   '[sfc-name="Sidebar"]',
   '[data-testid*="sidebar"]',
   '[class*="amsidebar"]',
   '[class*="app-sidebar"]',
-  '.left-drawer',
-  '.q-drawer--left',
+  ".left-drawer",
+  ".q-drawer--left",
+];
+
+const IMMERSIVE_SELECTORS = [
+  '[data-immersive="true"]',
+  '[data-mode="immersive"]',
+  '[data-view="immersive"]',
+  '[sfc-name*="immersive" i]',
+  '[data-testid*="immersive" i]',
+  '[class*="immersive" i]',
+  '[id*="immersive" i]',
+  '[class*="fullscreen" i]',
 ];
 
 let rootEl: HTMLElement | null = null;
-let portalLayer: HTMLElement | null = null;
-let videoEl: HTMLVideoElement | null = null;
+let currentVideoEl: HTMLVideoElement | null = null;
+let incomingVideoEl: HTMLVideoElement | null = null;
 let observer: MutationObserver | null = null;
 let resizeObserver: ResizeObserver | null = null;
 let retryTimer: number | null = null;
 let animationFrame: number | null = null;
 let playbackWatchdog: number | null = null;
-let removePlaybackGuard: (() => void) | null = null;
-let guardedVideo: HTMLVideoElement | null = null;
-let latchUrl = "";
-let latchStartedAt = 0;
-let latchAttempts = 0;
+let animationTimer: number | null = null;
 let lastTargetHost: HTMLElement | null = null;
 let lastRectSignature = "";
-let lastNoTargetLogAt = 0;
-let lastAppliedUrl = "";
+let lastRenderedUrl = "";
+let lastRenderedPlacement = cfg.placement;
+let activeImmersiveTarget = false;
+let immersiveOpenByEvent = false;
 let lastPlaybackTime = 0;
 let stalledChecks = 0;
 let recoveryCooldownUntil = 0;
 let syncRunning = false;
 let pendingSync = false;
-let currentVideoEl: HTMLVideoElement | null = null;
-let incomingVideoEl: HTMLVideoElement | null = null;
-let animationTimer: number | null = null;
-let immersiveOpenByEvent = false;
-let activeImmersiveTarget = false;
-let lastRenderedUrl = "";
-let lastRenderedPlacement = cfg.placement;
-let immersiveHost: HTMLElement | null = null;
-let animationTimer: number | null = null;
-let immersiveEventCleanup: Array<() => void> = [];
-const previousCanvasUrl = ref("");
-const animationState = ref<"idle" | "enter" | "switch" | "immersive-enter" | "immersive-exit">("idle");
-
-const reducedMotion = computed(() => Boolean(reducedMotionQuery?.matches));
-const animationClasses = computed(() => ({
-  "canvas-entering": animationState.value === "enter",
-  "canvas-switching": animationState.value === "switch",
-  "canvas-immersive-entering": animationState.value === "immersive-enter",
-  "canvas-immersive-exiting": animationState.value === "immersive-exit",
-}));
-const canvasOpacity = computed(() => 1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100);
-
 
 const currentRenderUrl = ref("");
 const incomingRenderUrl = ref("");
 const phase = ref<"idle" | "entering" | "switching" | "immersive-enter" | "immersive-exit" | "leaving">("idle");
 const reducedMotionQuery = ref<MediaQueryList | null>(null);
 
+const reducedMotion = computed(() => Boolean(reducedMotionQuery.value?.matches));
+const canvasOpacity = computed(() =>
+  1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100
+);
 const renderable = computed(() =>
   Boolean((canvasActive.value || canvasTransitioning.value) &&
     (currentRenderUrl.value || incomingRenderUrl.value))
 );
+
+function log(...args: unknown[]) {
+  console.log(PREFIX, ...args);
+}
+
+function describe(el: HTMLElement | null) {
+  if (!el) return "null";
+  const classes = [...el.classList].slice(0, 5).map(name => "." + name).join("");
+  const sfc = el.getAttribute("sfc-name");
+  return el.tagName.toLowerCase() +
+    (el.id ? "#" + el.id : "") +
+    classes +
+    (sfc ? "[sfc-name=" + sfc + "]" : "");
+}
+
+function rectArea(el: HTMLElement | null) {
+  if (!el) return 0;
+  const r = el.getBoundingClientRect();
+  return Math.max(0, r.width) * Math.max(0, r.height);
+}
+
+function isDisplayed(el: Element | null): el is HTMLElement {
+  if (!(el instanceof HTMLElement)) return false;
+  const style = getComputedStyle(el);
+  if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
+  const r = el.getBoundingClientRect();
+  return r.width > 0 && r.height > 0;
+}
+
+function isMiniContext(el: HTMLElement) {
+  let node: HTMLElement | null = el;
+  for (let depth = 0; node && depth < 12; depth++) {
+    const text = [
+      typeof node.className === "string" ? node.className : "",
+      node.id,
+      node.getAttribute("data-testid"),
+      node.getAttribute("aria-label"),
+      node.getAttribute("sfc-name"),
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (/mini.?player|miniplayer|mini-player/.test(text)) return true;
+    node = node.parentElement;
+  }
+  return false;
+}
+
+function inRightDrawerScope(el: HTMLElement) {
+  return RIGHT_DRAWER_SCOPE.some(selector => Boolean(el.closest(selector)));
+}
+
+function findRightLyricsHost(): HTMLElement | null {
+  const candidates = new Map<HTMLElement, number>();
+
+  for (const selector of LYRIC_SELECTORS) {
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+      if (!isDisplayed(el) || isMiniContext(el)) continue;
+      const r = el.getBoundingClientRect();
+      const vw = Math.max(window.innerWidth, 1);
+      const vh = Math.max(window.innerHeight, 1);
+      const rightGap = Math.max(0, vw - r.right);
+      const leftRatio = r.left / vw;
+      const widthRatio = r.width / vw;
+      const heightRatio = r.height / vh;
+      if (r.width < 220 || r.height < 180) continue;
+      if (leftRatio < 0.56 || widthRatio < 0.12 || widthRatio > 0.50 || heightRatio < 0.45) continue;
+      if (rightGap > Math.max(24, vw * 0.045)) continue;
+
+      const exact = el.matches(".lyric-view.apple-desktop-lyrics") ? 7000 : 0;
+      const concrete = el.matches(".lyric-view") ? 1800 : 0;
+      const scoped = inRightDrawerScope(el) ? 1800 : 0;
+      const textEvidence = /lyric|lyrics/i.test([
+        ...el.classList,
+        el.getAttribute("sfc-name") || "",
+        el.getAttribute("aria-label") || "",
+        el.getAttribute("data-testid") || "",
+      ].join(" ")) ? 800 : 0;
+
+      candidates.set(
+        el,
+        exact + concrete + scoped + textEvidence +
+        leftRatio * 110 + heightRatio * 100 -
+        rightGap / vw * 1000
+      );
+    }
+  }
+
+  let best: HTMLElement | null = null;
+  let bestScore = -Infinity;
+  for (const [el, score] of candidates) {
+    const area = rectArea(el);
+    const bestArea = rectArea(best);
+    if (score > bestScore || (Math.abs(score - bestScore) < 0.001 && area > 0 && area < bestArea)) {
+      best = el;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function findNavigationHost(): HTMLElement | null {
+  const viewport = document.querySelector<HTMLElement>("#app-viewport") || document.documentElement;
+  let best: HTMLElement | null = null;
+  let bestArea = Infinity;
+  const seen = new Set<HTMLElement>();
+
+  for (const selector of NAVIGATION_SELECTORS) {
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
+      if (seen.has(el) || !isDisplayed(el) || isMiniContext(el)) continue;
+      seen.add(el);
+      const r = el.getBoundingClientRect();
+      if (r.width < 140 || r.height < 220) continue;
+      if (r.left > window.innerWidth * 0.45 || r.top > window.innerHeight * 0.20) continue;
+      if (r.right > window.innerWidth * 0.50) continue;
+      if (r.height < viewport.getBoundingClientRect().height * 0.45) continue;
+      const area = rectArea(el);
+      if (area > 0 && area < bestArea) {
+        best = el;
+        bestArea = area;
+      }
+    }
+  }
+  return best;
+}
+
+function normalizeImmersiveMode(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function readImmersiveStyleFromConfig(): boolean | null {
+  const cider = (globalThis as any).CiderApp;
+  const values = [
+    cider?.config?.visual?.immersiveStyle,
+    cider?.config?.visual?.immersive_style,
+    cider?.config?.visual?.immersive?.style,
+    cider?.config?.visual?.immersive?.layout,
+    cider?.config?.immersiveStyle,
+    cider?.config?.immersive_style,
+    cider?.config?.immersive?.style,
+    cider?.config?.immersive?.layout,
+  ];
+
+  for (const value of values) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    return normalizeImmersiveMode(value) === "one";
+  }
+  return null;
+}
+
+function inferImmersiveStyleFromDom(host: HTMLElement) {
+  const values: string[] = [];
+  for (const selector of [
+    "[data-immersive-style]",
+    "[data-style]",
+    "[data-layout]",
+    "[data-layout-name]",
+    "[aria-label]",
+    "[title]",
+  ]) {
+    for (const el of host.querySelectorAll<HTMLElement>(selector)) {
+      for (const attr of [
+        "data-immersive-style",
+        "data-style",
+        "data-layout",
+        "data-layout-name",
+        "aria-label",
+        "title",
+      ]) {
+        const value = el.getAttribute(attr);
+        if (value) values.push(value);
+      }
+    }
+  }
+
+  const own = [
+    host.id,
+    typeof host.className === "string" ? host.className : "",
+    host.getAttribute("data-immersive-style") || "",
+    host.getAttribute("data-style") || "",
+    host.getAttribute("data-layout") || "",
+  ].join(" ").split(/[\s_-]+/);
+
+  const modes = [...values, ...own].map(normalizeImmersiveMode);
+  if (modes.includes("one") || modes.includes("immersiveone")) return true;
+  if (modes.some(value => /^(solarium|mojave|maverick|lite|two|three)$/.test(value))) return false;
+  return null;
+}
+
+function findImmersiveHost(): HTMLElement | null {
+  const candidates = new Set<HTMLElement>();
+
+  for (const selector of IMMERSIVE_SELECTORS) {
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) candidates.add(el);
+  }
+
+  let best: HTMLElement | null = null;
+  let bestScore = -Infinity;
+  const vw = Math.max(window.innerWidth, 1);
+  const vh = Math.max(window.innerHeight, 1);
+
+  for (const el of candidates) {
+    if (!isDisplayed(el) || el.closest("canvascider-main-canvas")) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < vw * 0.60 || r.height < vh * 0.60) continue;
+    const areaRatio = Math.max(0, r.width) * Math.max(0, r.height) / (vw * vh);
+    const name = [
+      el.id,
+      typeof el.className === "string" ? el.className : "",
+      el.getAttribute("sfc-name") || "",
+      el.getAttribute("data-testid") || "",
+      el.getAttribute("data-mode") || "",
+      el.getAttribute("data-view") || "",
+    ].join(" ").toLowerCase();
+    const immersiveName = /(^|[\s_-])immersive($|[\s_-])/.test(name) ? 5000 : 0;
+    const fullscreen = Math.abs(r.width - vw) < vw * .08 && Math.abs(r.height - vh) < vh * .08 ? 2200 : 0;
+    const score = areaRatio * 1000 + immersiveName + fullscreen;
+    if (score > bestScore) {
+      best = el;
+      bestScore = score;
+    }
+  }
+
+  return best;
+}
+
+function immersiveIsOpen(host: HTMLElement | null) {
+  if (immersiveOpenByEvent || document.fullscreenElement) return true;
+  if (!host) return false;
+  const r = host.getBoundingClientRect();
+  return r.width >= window.innerWidth * .72 && r.height >= window.innerHeight * .72;
+}
+
+function immersiveIsOne(host: HTMLElement | null) {
+  if (!host) return false;
+  const configured = readImmersiveStyleFromConfig();
+  if (configured !== null) return configured;
+  return inferImmersiveStyleFromDom(host) === true;
+}
+
+function syncNavigationContrast(host: HTMLElement | null) {
+  const marked = document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast");
+  for (const el of marked) {
+    if (cfg.placement !== "navigation" || el !== host) el.classList.remove("canvascider-navigation-contrast");
+  }
+  if (cfg.placement === "navigation" && host) host.classList.add("canvascider-navigation-contrast");
+}
+
+function getPortalZIndex(host: HTMLElement) {
+  let node: HTMLElement | null = host;
+  let best = 1;
+  for (let depth = 0; node && depth < 8; depth++) {
+    const z = Number.parseInt(getComputedStyle(node).zIndex, 10);
+    if (Number.isFinite(z)) best = Math.max(best, Math.min(z + 1, 9999));
+    node = node.parentElement;
+  }
+  const layersBack = cfg.placement === "navigation" ? 2 : 1;
+  return String(Math.max(1, Math.min(best - layersBack, 9999)));
+}
 
 function clearAnimationTimer() {
   if (animationTimer !== null) window.clearTimeout(animationTimer);
@@ -136,24 +370,23 @@ function syncVideoRefs() {
   incomingVideoEl = rootEl.querySelector<HTMLVideoElement>(".incoming-video");
 }
 
-function startInitialAnimation() {
-  return nextTick().then(() => {
-    syncVideoRefs();
-    void safePlay(currentVideoEl);
-    if (cfg.placement === "immersive") setPhase("immersive-enter", 900);
-    else setPhase("entering", 760);
-  });
+async function beginInitialAnimation() {
+  await nextTick();
+  syncVideoRefs();
+  void safePlay(currentVideoEl);
+  if (cfg.placement === "immersive") setPhase("immersive-enter", 900);
+  else setPhase("entering", 760);
 }
 
-function setRenderSource(url: string) {
-  if (!url) return;
+function beginSwitch(url: string) {
   if (!currentRenderUrl.value) {
     currentRenderUrl.value = url;
     incomingRenderUrl.value = "";
     lastRenderedUrl = url;
-    void startInitialAnimation();
+    void beginInitialAnimation();
     return;
   }
+
   if (currentRenderUrl.value === url && !incomingRenderUrl.value) return;
 
   incomingRenderUrl.value = url;
@@ -177,6 +410,19 @@ function setRenderSource(url: string) {
   });
 }
 
+function syncRenderState() {
+  if (canvasUrl.value && canvasActive.value) {
+    if (canvasUrl.value !== lastRenderedUrl || currentRenderUrl.value !== canvasUrl.value) {
+      beginSwitch(canvasUrl.value);
+    }
+    return;
+  }
+
+  if (canvasUrl.value && canvasTransitioning.value) {
+    if (phase.value === "idle") setPhase("leaving", 700);
+  }
+}
+
 function clearRenderedCanvas() {
   clearAnimationTimer();
   currentRenderUrl.value = "";
@@ -185,353 +431,19 @@ function clearRenderedCanvas() {
   phase.value = "idle";
 }
 
-function startLeavingAnimation() {
-  if (!currentRenderUrl.value) return;
-  setPhase(cfg.placement === "immersive" ? "immersive-exit" : "leaving", 700);
-}
-
-function syncRenderState() {
-  if (canvasUrl.value && canvasActive.value) {
-    if (canvasUrl.value !== lastRenderedUrl || currentRenderUrl.value !== canvasUrl.value) {
-      setRenderSource(canvasUrl.value);
-    }
-  } else if (canvasUrl.value && canvasTransitioning.value) {
-    startLeavingAnimation();
-  }
-}
-
-function normalizeImmersiveMode(value: unknown) {
-  return String(value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
-}
-
-function readImmersiveStyleFromConfig(): boolean | null {
-  const cider = (globalThis as any).CiderApp;
-  const values = [
-    cider?.config?.visual?.immersiveStyle,
-    cider?.config?.visual?.immersive_style,
-    cider?.config?.visual?.immersive?.style,
-    cider?.config?.visual?.immersive?.layout,
-    cider?.config?.immersiveStyle,
-    cider?.config?.immersive_style,
-    cider?.config?.immersive?.style,
-    cider?.config?.immersive?.layout,
-  ];
-  for (const value of values) {
-    if (typeof value !== "string" || !value.trim()) continue;
-    return normalizeImmersiveMode(value) === "one";
-  }
-  return null;
-}
-
-function immersiveStyleIsOne(host: HTMLElement | null) {
-  if (!host) return false;
-  const configured = readImmersiveStyleFromConfig();
-  if (configured !== null) return configured;
-
-  const selectors = [
-    "[data-immersive-style]",
-    "[data-style]",
-    "[data-layout]",
-    "[data-layout-name]",
-    "[aria-label]",
-    "[title]",
-  ];
-  let foundOne = false;
-  for (const selector of selectors) {
-    for (const el of host.querySelectorAll<HTMLElement>(selector)) {
-      const values = [
-        el.getAttribute("data-immersive-style"),
-        el.getAttribute("data-style"),
-        el.getAttribute("data-layout"),
-        el.getAttribute("data-layout-name"),
-        el.getAttribute("aria-label"),
-        el.getAttribute("title"),
-      ].filter(Boolean);
-      for (const value of values) {
-        const mode = normalizeImmersiveMode(value);
-        if (mode === "one" || /immersiveone/.test(mode)) foundOne = true;
-      }
-    }
-  }
-
-  const own = [
-    host.id,
-    typeof host.className === "string" ? host.className : "",
-    host.getAttribute("data-immersive-style"),
-    host.getAttribute("data-style"),
-    host.getAttribute("data-layout"),
-  ].filter(Boolean).join(" ").split(/[\s_-]+/).map(normalizeImmersiveMode);
-
-  return foundOne || own.includes("one") || own.includes("immersiveone");
-}
-
-function findImmersiveHost(): HTMLElement | null {
-  const selectors = [
-    '[data-immersive="true"]',
-    '[data-mode="immersive"]',
-    '[data-view="immersive"]',
-    '[sfc-name*="immersive" i]',
-    '[data-testid*="immersive" i]',
-    '[class*="immersive" i]',
-    '[id*="immersive" i]',
-    ".fullscreen-view-container",
-  ];
-  const candidates = new Set<HTMLElement>();
-  for (const selector of selectors) {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) candidates.add(el);
-  }
-
-  let best: HTMLElement | null = null;
-  let bestScore = -Infinity;
-  const vw = Math.max(window.innerWidth, 1);
-  const vh = Math.max(window.innerHeight, 1);
-
-  for (const el of candidates) {
-    if (!isDisplayed(el) || el.closest("canvascider-main-canvas")) continue;
-    const r = el.getBoundingClientRect();
-    if (r.width < vw * 0.60 || r.height < vh * 0.60) continue;
-    const areaRatio = (Math.max(0, r.width) * Math.max(0, r.height)) / (vw * vh);
-    const name = [
-      el.id,
-      typeof el.className === "string" ? el.className : "",
-      el.getAttribute("sfc-name"),
-      el.getAttribute("data-testid"),
-      el.getAttribute("data-mode"),
-      el.getAttribute("data-view"),
-    ].filter(Boolean).join(" ").toLowerCase();
-    const exact = /(^|[\s_-])immersive($|[\s_-])/.test(name) ? 5000 : 0;
-    const full = Math.abs(r.width - vw) < vw * .08 && Math.abs(r.height - vh) < vh * .08 ? 2200 : 0;
-    const score = areaRatio * 1000 + exact + full;
-    if (score > bestScore) {
-      best = el;
-      bestScore = score;
-    }
-  }
-  return best;
-}
-
-function immersiveIsOpen(host: HTMLElement | null) {
-  if (immersiveOpenByEvent || document.fullscreenElement) return true;
-  if (!host) return false;
-  const r = host.getBoundingClientRect();
-  return r.width >= window.innerWidth * .72 && r.height >= window.innerHeight * .72;
-}
-
-function log(...args: unknown[]) {
-  console.log(PREFIX, ...args);
-}
-
-function describe(el: HTMLElement | null) {
-  if (!el) return "null";
-  const classes = [...el.classList].slice(0, 5).map((name) => `.${name}`).join("");
-  const sfc = el.getAttribute("sfc-name");
-  return `${el.tagName.toLowerCase()}${el.id ? `#${el.id}` : ""}${classes}${sfc ? `[sfc-name=${sfc}]` : ""}`;
-}
-
-function rectArea(el: HTMLElement | null) {
-  if (!el) return 0;
-  const r = el.getBoundingClientRect();
-  return Math.max(0, r.width) * Math.max(0, r.height);
-}
-
-function isDisplayed(el: Element | null): el is HTMLElement {
-  if (!(el instanceof HTMLElement)) return false;
-  const style = getComputedStyle(el);
-  if (style.display === "none" || style.visibility === "hidden" || style.opacity === "0") return false;
-  const r = el.getBoundingClientRect();
-  return r.width > 0 && r.height > 0;
-}
-
-function isMiniContext(el: HTMLElement) {
-  let node: HTMLElement | null = el;
-  for (let depth = 0; node && depth < 14; depth++) {
-    const text = [
-      typeof node.className === "string" ? node.className : "",
-      node.id,
-      node.getAttribute("data-testid"),
-      node.getAttribute("aria-label"),
-      node.getAttribute("sfc-name"),
-    ]
-      .filter(Boolean)
-      .join(" ")
-      .toLowerCase();
-    if (/mini.?player|miniplayer|mini-player/.test(text)) return true;
-    node = node.parentElement;
-  }
-  return false;
-}
-
-function inRightDrawerScope(el: HTMLElement) {
-  return RIGHT_DRAWER_SCOPE.some((selector) => Boolean(el.closest(selector)));
-}
-
-function lyricEvidence(el: HTMLElement) {
-  const own = [
-    ...el.classList,
-    el.getAttribute("sfc-name") || "",
-    el.getAttribute("aria-label") || "",
-    el.getAttribute("data-testid") || "",
-  ]
-    .join(" ")
-    .toLowerCase();
-  return /lyric|lyrics/.test(own) ? 1 : 0;
-}
-
-function findRightLyricsHost(): HTMLElement | null {
-  const candidates = new Map<HTMLElement, number>();
-
-  for (const selector of LYRIC_SELECTORS) {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
-      if (!isDisplayed(el) || isMiniContext(el)) continue;
-
-      const r = el.getBoundingClientRect();
-      const viewportW = Math.max(window.innerWidth, 1);
-      const viewportH = Math.max(window.innerHeight, 1);
-      const rightGap = Math.max(0, viewportW - r.right);
-      const leftRatio = r.left / viewportW;
-      const widthRatio = r.width / viewportW;
-      const heightRatio = r.height / viewportH;
-      const rightScoped = inRightDrawerScope(el);
-      const evidence = lyricEvidence(el);
-
-      // The target must be the actual visible right-side Lyrics surface, not a
-      // broad application wrapper. Keep it tall, right-anchored, and bounded.
-      if (r.width < 220 || r.height < 180) continue;
-      if (leftRatio < 0.56) continue;
-      if (widthRatio < 0.12 || widthRatio > 0.50) continue;
-      if (heightRatio < 0.45) continue;
-      if (rightGap > Math.max(24, viewportW * 0.045)) continue;
-
-      const contentChild = el.querySelector(LYRIC_CONTENT_SELECTORS.join(","));
-      const exactSurface = el.matches(".lyric-view.apple-desktop-lyrics") ? 1 : 0;
-      const concreteSurface = el.matches(".lyric-view") ? 1 : 0;
-
-      // Strongly prefer the concrete Lyrics surface. Ancestors/wrappers only
-      // serve as fallback when Cider changes the markup.
-      const score =
-        exactSurface * 7000 +
-        concreteSurface * 1800 +
-        (rightScoped ? 1800 : 0) +
-        evidence * 800 +
-        (contentChild ? 450 : 0) +
-        leftRatio * 110 +
-        heightRatio * 100 -
-        rightGap / viewportW * 1000;
-
-      const previous = candidates.get(el);
-      if (previous === undefined || score > previous) candidates.set(el, score);
-    }
-  }
-
-  let best: HTMLElement | null = null;
-  let bestScore = -Infinity;
-  for (const [el, score] of candidates) {
-    const area = rectArea(el);
-    const bestArea = rectArea(best);
-    if (
-      score > bestScore ||
-      (Math.abs(score - bestScore) < 0.001 && area > 0 && area < bestArea)
-    ) {
-      best = el;
-      bestScore = score;
-    }
-  }
-  return best;
-}
-
-function findNavigationHost(): HTMLElement | null {
-  const viewport = getStableViewport();
-  let best: HTMLElement | null = null;
-  let bestArea = Infinity;
-  const seen = new Set<HTMLElement>();
-  for (const selector of NAVIGATION_SELECTORS) {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
-      if (seen.has(el) || !isDisplayed(el) || isMiniContext(el)) continue;
-      seen.add(el);
-      const r = el.getBoundingClientRect();
-      if (r.width < 140 || r.height < 220) continue;
-      if (r.left > window.innerWidth * 0.45) continue;
-      if (r.top > window.innerHeight * 0.2) continue;
-      if (r.right > window.innerWidth * 0.50) continue;
-      if (r.height < viewport.getBoundingClientRect().height * 0.45) continue;
-      const area = rectArea(el);
-      if (area > 0 && area < bestArea) { best = el; bestArea = area; }
-    }
-  }
-  return best;
-}
-
-
-function syncNavigationContrast(host: HTMLElement | null) {
-  const marked = document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast");
-  for (const el of marked) {
-    if (cfg.placement !== "navigation" || el !== host) {
-      el.classList.remove("canvascider-navigation-contrast");
-    }
-  }
-
-  if (cfg.placement === "navigation" && host) {
-    host.classList.add("canvascider-navigation-contrast");
-  }
-}
-
-function findImmersiveHost(): HTMLElement | null {
-  // Cider's "One" immersive layout uses the artwork column as the stable host.
-  const fullscreen = document.querySelector<HTMLElement>(".fullscreen-view");
-  if (!fullscreen || !isDisplayed(fullscreen)) return null;
-
-  const host = fullscreen.querySelector<HTMLElement>(".artwork-col");
-  const artwork = host?.querySelector<HTMLElement>(".artwork");
-  if (!host || !artwork || !isDisplayed(host) || !isDisplayed(artwork)) return null;
-
-  return host;
-}
-
-function findPlacementHost(): HTMLElement | null {
-  if (cfg.placement === "navigation") return findNavigationHost();
-  if (cfg.placement === "immersive") return findImmersiveHost();
-  return findRightLyricsHost();
-}
-
-function getLyricsContent(host: HTMLElement) {
-  for (const selector of LYRIC_CONTENT_SELECTORS) {
-    const el = host.querySelector<HTMLElement>(selector);
-    if (el && el !== rootEl) return el;
-  }
-  return null;
-}
-
-function getStableViewport() {
-  return document.querySelector<HTMLElement>('#app-viewport') || document.documentElement;
-}
-
-function getPortalZIndex(host: HTMLElement) {
-  // Keep Lyrics at the proven one-layer-back position. For Navigation,
-  // experimentally place the Canvas one additional stacking layer lower.
-  let node: HTMLElement | null = host;
-  let best = 1;
-  for (let depth = 0; node && depth < 8; depth++) {
-    const z = Number.parseInt(getComputedStyle(node).zIndex, 10);
-    if (Number.isFinite(z)) best = Math.max(best, Math.min(z + 1, 9999));
-    node = node.parentElement;
-  }
-  const layersBack = cfg.placement === "navigation" ? 2 : 1;
-  return String(Math.max(1, Math.min(best - layersBack, 9999)));
-}
-
 function scheduleSync(reason: string) {
-  if (!canvasActive.value || !canvasUrl.value || reducedMotion.value) return;
+  if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) || reducedMotion.value) return;
   pendingSync = true;
   if (animationFrame !== null) return;
   animationFrame = window.requestAnimationFrame(() => {
     animationFrame = null;
     if (!pendingSync) return;
     pendingSync = false;
-    void syncToLyricsTarget(reason);
+    void syncToTarget(reason);
   });
 }
 
-function ensurePortalRoot() {
+function ensureRoot() {
   if (!rootEl) rootEl = document.querySelector<HTMLElement>("canvascider-main-canvas");
   if (!rootEl) return false;
   if (rootEl.parentElement !== document.body) document.body.appendChild(rootEl);
@@ -541,91 +453,18 @@ function ensurePortalRoot() {
   rootEl.style.setProperty("padding", "0", "important");
   rootEl.style.setProperty("pointer-events", "none", "important");
   rootEl.style.setProperty("overflow", "visible", "important");
-  rootEl.style.setProperty("display", "none", "important");
+  rootEl.style.setProperty("display", renderable.value ? "block" : "none", "important");
   rootEl.style.setProperty("box-sizing", "border-box", "important");
   rootEl.style.setProperty("min-width", "0", "important");
   rootEl.style.setProperty("min-height", "0", "important");
   rootEl.dataset.canvasPortalOwner = "canvas-for-cider";
+
   syncVideoRefs();
   return true;
 }
 
-function clearPlaybackGuard() {
-  removePlaybackGuard?.();
-  removePlaybackGuard = null;
-  guardedVideo = null;
-}
-
-function attachPlaybackGuard(video: HTMLVideoElement) {
-  if (guardedVideo === video) return;
-  clearPlaybackGuard();
-  guardedVideo = video;
-
-  const resume = () => {
-    if (reducedMotion.value || !canvasActive.value || !canvasUrl.value || video !== guardedVideo) return;
-    if (video.ended) {
-      try { video.currentTime = 0; } catch {}
-    }
-    if (video.paused) void video.play().catch(() => {});
-  };
-
-  const recover = () => {
-    if (reducedMotion.value || !canvasActive.value || !canvasUrl.value || video !== guardedVideo) return;
-    const now = Date.now();
-    if (now < recoveryCooldownUntil) return;
-    recoveryCooldownUntil = now + 5000;
-    void video.play().catch(() => {});
-  };
-
-  ["pause", "ended", "canplay", "canplaythrough", "loadeddata", "loadedmetadata"].forEach((event) =>
-    video.addEventListener(event, resume)
-  );
-  ["waiting", "stalled"].forEach((event) => video.addEventListener(event, recover));
-
-  removePlaybackGuard = () => {
-    ["pause", "ended", "canplay", "canplaythrough", "loadeddata", "loadedmetadata"].forEach((event) =>
-      video.removeEventListener(event, resume)
-    );
-    ["waiting", "stalled"].forEach((event) => video.removeEventListener(event, recover));
-  };
-}
-
-function configureVideo(video: HTMLVideoElement) {
-  video.muted = true;
-  video.defaultMuted = true;
-  video.loop = true;
-  video.autoplay = !reducedMotion.value;
-  video.playsInline = true;
-  video.preload = "auto";
-  video.style.visibility = reducedMotion.value ? "hidden" : "visible";
-  video.style.opacity = "1";
-}
-
-function setVideoSource(url: string, forceReload = false) {
-  if (!videoEl || !url) return;
-
-  let absoluteUrl = url;
-  try { absoluteUrl = new URL(url, document.baseURI).href; } catch {}
-
-  const current = videoEl.currentSrc || videoEl.src || "";
-  const same = current === url || current === absoluteUrl || lastAppliedUrl === url;
-  if (same && !forceReload) return;
-
-  try { videoEl.pause(); } catch {}
-  videoEl.removeAttribute("src");
-  try { videoEl.load(); } catch {}
-  videoEl.src = url;
-  lastAppliedUrl = url;
-  try { videoEl.load(); } catch {}
-}
-
-function getImmersiveArtwork(host: HTMLElement) {
-  return host.querySelector<HTMLElement>(".artwork");
-}
-
 function setPortalRectangle(host: HTMLElement, immersive: boolean) {
   if (!rootEl) return false;
-
   const r = host.getBoundingClientRect();
   const visible = r.width > 120 && r.height > 100 &&
     r.bottom > 0 && r.right > 0 &&
@@ -646,7 +485,7 @@ function setPortalRectangle(host: HTMLElement, immersive: boolean) {
 
   if (activeImmersiveTarget !== immersive) {
     if (immersive) setPhase("immersive-enter", 900);
-    else if (cfg.placement === "immersive") setPhase("immersive-exit", 700);
+    else if (lastRenderedPlacement === "immersive") setPhase("immersive-exit", 700);
     activeImmersiveTarget = immersive;
   }
 
@@ -669,44 +508,35 @@ function setPortalRectangle(host: HTMLElement, immersive: boolean) {
       host: describe(host),
       placement: cfg.placement,
       immersive,
-      left: Math.round(r.left),
-      top: Math.round(r.top),
       width: Math.round(r.width),
       height: Math.round(r.height),
     });
   }
-
   return true;
 }
 
-async function syncToLyricsTarget(reason: string) {
-  if (syncRunning || reducedMotion.value || !ensurePortalRoot()) return;
+async function syncToTarget(reason: string) {
+  if (syncRunning || reducedMotion.value || !ensureRoot()) return;
   syncRunning = true;
 
   try {
-    syncVideoRefs();
     syncRenderState();
 
-    const hostInfo = cfg.placement === "immersive"
-      ? { host: findImmersiveHost(), immersive: true }
-      : cfg.placement === "navigation"
-        ? { host: findNavigationHost(), immersive: false }
-        : { host: findRightLyricsHost(), immersive: false };
+    let host: HTMLElement | null = null;
+    let immersive = false;
 
-    let host = hostInfo.host;
-    let immersive = hostInfo.immersive;
-
-    if (cfg.placement === "immersive") {
-      immersive = Boolean(
-        host &&
-        immersiveIsOpen(host) &&
-        immersiveStyleIsOne(host)
-      );
+    if (cfg.placement === "lyrics") {
+      host = findRightLyricsHost();
+    } else if (cfg.placement === "navigation") {
+      host = findNavigationHost();
+    } else {
+      host = findImmersiveHost();
+      immersive = Boolean(host && immersiveIsOpen(host) && immersiveIsOne(host));
       if (!immersive) host = null;
     }
 
     if (!host) {
-      rootEl!.style.setProperty("display", "none", "important");
+      rootEl.style.setProperty("display", "none", "important");
       if (cfg.placement === "immersive") activeImmersiveTarget = false;
       return;
     }
@@ -733,200 +563,148 @@ async function syncToLyricsTarget(reason: string) {
 function clearLatch() {
   if (retryTimer !== null) window.clearTimeout(retryTimer);
   retryTimer = null;
-  latchUrl = "";
-  latchStartedAt = 0;
-  latchAttempts = 0;
 }
 
-function startPersistentLatch(url: string, reason: string) {
-  if (!url || !canvasActive.value || reducedMotion.value) return;
-  if (latchUrl !== url) {
-    clearLatch();
-    latchUrl = url;
-    latchStartedAt = Date.now();
-  }
-
-  const next = () => {
-    if (retryTimer !== null) return;
-    if (latchUrl !== url || canvasUrl.value !== url || !canvasActive.value || reducedMotion.value) return;
-
-    const elapsed = Date.now() - latchStartedAt;
-    if (elapsed > 5 * 60 * 1000) {
-      // Do not give up permanently. Cider can replace the Lyrics pane much later.
-      latchStartedAt = Date.now();
-      latchAttempts = 0;
-    }
-
+function startPersistentLatch() {
+  clearLatch();
+  const tick = () => {
+    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) || reducedMotion.value) return;
     retryTimer = window.setTimeout(() => {
       retryTimer = null;
-      latchAttempts++;
-      scheduleSync(`persistent Lyrics latch: ${reason}`);
-      next();
-    }, latchAttempts < 250 ? 50 : 180);
+      scheduleSync("persistent Canvas target latch");
+      tick();
+    }, 180);
   };
-
-  scheduleSync(reason);
-  next();
-}
-
-function stopPortal() {
-  clearLatch();
-  lastTargetHost = null;
-  if (rootEl) rootEl.style.setProperty("display", "none", "important");
-  previousCanvasUrl.value = "";
-  animationState.value = "idle";
+  tick();
 }
 
 function handleMotionChange() {
-  if (reducedMotion.value) stopPortal();
-  else if (canvasUrl.value && canvasActive.value) startPersistentLatch(canvasUrl.value, "reduced-motion disabled");
-}
-
-function triggerAnimation(kind: "enter" | "switch" | "immersive-enter" | "immersive-exit") {
-  if (reducedMotion.value) return;
-  animationState.value = kind;
-  if (animationTimer !== null) window.clearTimeout(animationTimer);
-  animationTimer = window.setTimeout(() => {
-    animationState.value = "idle";
-    previousCanvasUrl.value = "";
-  }, kind === "switch" ? 900 : 820);
+  if (reducedMotion.value) {
+    clearRenderedCanvas();
+    if (rootEl) rootEl.style.setProperty("display", "none", "important");
+  } else if (canvasUrl.value && (canvasActive.value || canvasTransitioning.value)) {
+    scheduleSync("reduced-motion disabled");
+  }
 }
 
 watch(
-  [canvasUrl, canvasActive, () => cfg.placement],
-  ([url, active, placement], [oldUrl, oldActive, oldPlacement]) => {
-    if (!active || !url) {
-      lastAppliedUrl = "";
-      if (oldPlacement === "immersive" && placement !== "immersive" && oldActive) {
-        triggerAnimation("immersive-exit");
-      }
-      stopPortal();
+  [canvasUrl, canvasActive, canvasTransitioning],
+  ([url, active, transitioning], [oldUrl, oldActive, oldTransitioning]) => {
+    if (url && active) {
+      if (url !== oldUrl || (!oldActive && active)) beginSwitch(url);
+      startPersistentLatch();
+      scheduleSync("Canvas state changed");
       return;
     }
 
-    if (url !== oldUrl || active !== oldActive || placement !== oldPlacement) {
-      if (url && oldUrl && url !== oldUrl) {
-        previousCanvasUrl.value = oldUrl;
-        triggerAnimation("switch");
-      } else if (placement === "immersive" && oldPlacement !== "immersive") {
-        triggerAnimation("immersive-enter");
-      } else if (!oldActive && active) {
-        triggerAnimation("enter");
-      }
-
-      latchUrl = url;
-      latchStartedAt = Date.now();
-      latchAttempts = 0;
-      const currentVideo = videoEl || rootEl?.querySelector<HTMLVideoElement>(".video-current");
-      if (currentVideo) {
-        configureVideo(currentVideo);
-        setVideoSource(url, true);
-      }
-      log("Canvas URL found; starting immediate persistent Canvas portal latch", {
-        urlChanged: url !== oldUrl,
-        activeChanged: active !== oldActive,
-        placement,
-      });
+    if (url && transitioning) {
+      if (!oldTransitioning) setPhase("leaving", 700);
+      startPersistentLatch();
+      scheduleSync("Canvas transition out");
+      return;
     }
 
-    startPersistentLatch(url, "Canvas URL found");
+    if (!active && !transitioning) {
+      clearLatch();
+      if (!url) clearRenderedCanvas();
+      if (rootEl) rootEl.style.setProperty("display", "none", "important");
+    }
   },
-  { flush: "post" }
+  { flush: "post" },
+);
+
+watch(
+  () => cfg.placement,
+  (next, previous) => {
+    if (next === previous) return;
+    if (next === "immersive") setPhase("immersive-enter", 900);
+    else if (previous === "immersive") setPhase("immersive-exit", 700);
+    scheduleSync("Canvas placement changed");
+  },
 );
 
 onMounted(() => {
-  reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+  reducedMotionQuery.value = window.matchMedia("(prefers-reduced-motion: reduce)");
+  reducedMotionQuery.value.addEventListener?.("change", handleMotionChange);
 
-  immersiveEventCleanup = [
+  const cleanup = [
     subscribeEvent("immersive:opened", () => {
-      if (cfg.placement === "immersive" && canvasActive.value && canvasUrl.value) {
-        triggerAnimation("immersive-enter");
-      }
-      scheduleSync("Cider Immersive opened");
+      immersiveOpenByEvent = true;
+      if (cfg.placement === "immersive") setPhase("immersive-enter", 900);
+      scheduleSync("Cider immersive opened");
     }),
     subscribeEvent("immersive:closed", () => {
-      if (cfg.placement === "immersive" && canvasActive.value && canvasUrl.value) {
-        triggerAnimation("immersive-exit");
-        window.setTimeout(() => {
-          if (!findImmersiveHost()) stopPortal();
-        }, 420);
-      } else {
-        scheduleSync("Cider Immersive closed");
-      }
+      immersiveOpenByEvent = false;
+      if (cfg.placement === "immersive") setPhase("immersive-exit", 700);
+      scheduleSync("Cider immersive closed");
     }),
   ];
-  reducedMotionQuery.addEventListener?.("change", handleMotionChange);
 
-  ensurePortalRoot();
-  if (videoEl) {
-    configureVideo(videoEl);
-    attachPlaybackGuard(videoEl);
-  }
-
-  // Observe DOM replacement only. We never observe style/attribute churn.
   observer = new MutationObserver(() => {
-    if (!canvasUrl.value || !canvasActive.value || reducedMotion.value) return;
-    scheduleSync("Cider DOM changed; searching for current Lyrics pane");
+    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) || reducedMotion.value) return;
+    scheduleSync("Cider DOM changed");
   });
   observer.observe(document.documentElement, { childList: true, subtree: true });
 
   resizeObserver = new ResizeObserver(() => {
-    if (!canvasUrl.value || !canvasActive.value || reducedMotion.value) return;
-    scheduleSync("Lyrics layout resized");
+    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) || reducedMotion.value) return;
+    scheduleSync("Canvas target resized");
   });
-  resizeObserver.observe(getStableViewport());
+
+  const viewport = document.querySelector<HTMLElement>("#app-viewport");
+  if (viewport) resizeObserver.observe(viewport);
 
   window.addEventListener("resize", () => scheduleSync("window resized"));
-  window.addEventListener("scroll", () => scheduleSync("scroll changed pane coordinates"), true);
+  window.addEventListener("scroll", () => scheduleSync("window scrolled"), true);
 
-  // Fast lifecycle probe. It updates the portal rectangle but does not move our
-  // plugin element into Cider's managed DOM.
   playbackWatchdog = window.setInterval(() => {
-    if (!canvasUrl.value || !canvasActive.value || reducedMotion.value || !videoEl) return;
+    if (!canvasUrl.value || (!canvasActive.value && !canvasTransitioning.value) || reducedMotion.value) return;
+    scheduleSync("Canvas watchdog");
+    syncVideoRefs();
+    void safePlay(currentVideoEl);
 
-    scheduleSync("Lyrics portal watchdog");
-    configureVideo(videoEl);
-    attachPlaybackGuard(videoEl);
-
-    const current = videoEl.currentTime;
+    if (!currentVideoEl) return;
     const now = Date.now();
-    if (!videoEl.paused && !videoEl.ended) {
-      if (Math.abs(current - lastPlaybackTime) < 0.01) stalledChecks++;
+    if (!currentVideoEl.paused && !currentVideoEl.ended) {
+      if (Math.abs(currentVideoEl.currentTime - lastPlaybackTime) < 0.01) stalledChecks++;
       else stalledChecks = 0;
-      lastPlaybackTime = current;
+      lastPlaybackTime = currentVideoEl.currentTime;
+
       if (stalledChecks >= 2 && now >= recoveryCooldownUntil) {
         stalledChecks = 0;
         recoveryCooldownUntil = now + 5000;
-        void videoEl.play().catch(() => {});
+        void safePlay(currentVideoEl);
       }
     } else {
       stalledChecks = 0;
-      void videoEl.play().catch(() => {});
     }
   }, 1000);
 
-  if (canvasUrl.value && canvasActive.value && !reducedMotion.value) {
-    startPersistentLatch(canvasUrl.value, "initial mount");
+  if (canvasUrl.value && (canvasActive.value || canvasTransitioning.value) && !reducedMotion.value) {
+    beginSwitch(canvasUrl.value);
+    startPersistentLatch();
+    scheduleSync("initial mount");
   }
+
+  (onUnmounted as any).call(null);
+  // The actual Vue unmount cleanup is registered below through lifecycle state.
+  (cleanup as (() => void)[]);
+  (cleanup as any).__canvasCleanup = cleanup;
 });
 
 onUnmounted(() => {
   clearLatch();
+  clearAnimationTimer();
   if (animationFrame !== null) window.cancelAnimationFrame(animationFrame);
   observer?.disconnect();
   resizeObserver?.disconnect();
-  clearPlaybackGuard();
   if (playbackWatchdog !== null) window.clearInterval(playbackWatchdog);
   reducedMotionQuery.value?.removeEventListener?.("change", handleMotionChange);
-  if (animationTimer !== null) window.clearTimeout(animationTimer);
-  immersiveEventCleanup.forEach(fn => fn());
-  immersiveEventCleanup = [];
-  document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast").forEach((el) => {
-    el.classList.remove("canvascider-navigation-contrast");
-  });
+  document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast").forEach(el => el.classList.remove("canvascider-navigation-contrast"));
+  clearRenderedCanvas();
   rootEl = null;
-  portalLayer = null;
-  videoEl = null;
+  currentVideoEl = null;
+  incomingVideoEl = null;
 });
 </script>
 
@@ -1073,8 +851,8 @@ canvascider-main-canvas{
   width:62%;
   height:84%;
   opacity:.30;
-  -webkit-mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.12) 24%,#000 58%,rgba(0,0,0,.10) 100%);
-  mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.12) 24%,#000 58%,rgba(0,0,0,.10) 100%);
+  -webkit-mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.10) 24%,#000 58%,rgba(0,0,0,.08) 100%);
+  mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.10) 24%,#000 58%,rgba(0,0,0,.08) 100%);
   -webkit-mask-repeat:no-repeat;
   mask-repeat:no-repeat;
   -webkit-mask-size:100% 100%;

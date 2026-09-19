@@ -10,13 +10,18 @@ export interface AppleArtworkAnalysis {
   appleArtworkUrl?: string;
 }
 
-const PREFIX = "[Canvas for Cider] Artwork Analysis";
 const PROBE_TIMEOUT_MS = 2500;
-const SAMPLE_POINTS = [0.08, 0.5, 0.92];
+const SAMPLE_COUNT = 3;
+const LIVE_SAMPLE_DELAY_MS = 160;
+
+type AppleArtworkSource = {
+  video?: HTMLVideoElement;
+  url?: string;
+};
 
 function isMediaUrl(value: string) {
   return /^(https?:|blob:)/i.test(value) &&
-    /\.(?:mp4|mov|m4v|m3u8)(?:[?#].*)?$/i.test(value);
+    /.(?:mp4|mov|m4v|m3u8)(?:[?#].*)?$/i.test(value);
 }
 
 function looksLikeArtworkKey(key: string) {
@@ -53,25 +58,43 @@ function collectObjectUrls(value: unknown, output: string[], seen: Set<unknown>,
 }
 
 function visibleAppleArtworkVideos(): HTMLVideoElement[] {
-  const videos = [...document.querySelectorAll<HTMLVideoElement>("video")];
-  return videos
+  const selectors = [
+    "video.animated-artwork-video",
+    "video#animated-artwork",
+  ];
+
+  const candidates = new Set<HTMLElement>();
+  for (const selector of selectors) {
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) candidates.add(el);
+  }
+
+  for (const video of document.querySelectorAll<HTMLVideoElement>("video")) {
+    if (video.closest("canvascider-main-canvas")) continue;
+    const rect = video.getBoundingClientRect();
+    if (rect.width < 120 || rect.height < 160) continue;
+    const ratio = rect.width / Math.max(rect.height, 1);
+    if (ratio > 0.95 || ratio < 0.45) continue;
+
+    const context = [
+      video.className,
+      video.getAttribute("aria-label") || "",
+      video.getAttribute("data-testid") || "",
+      video.getAttribute("sfc-name") || "",
+      video.parentElement?.className || "",
+      video.parentElement?.getAttribute("sfc-name") || "",
+    ].join(" ").toLowerCase();
+
+    if (/artwork|animated|motion|album|immersive/.test(context)) candidates.add(video);
+  }
+
+  return [...candidates]
     .filter(video => {
-      if (video.closest("canvascider-main-canvas") || video.classList.contains("canvascider-analysis-probe")) return false;
       const rect = video.getBoundingClientRect();
-      if (rect.width < 120 || rect.height < 160) return false;
-      const ratio = rect.width / Math.max(rect.height, 1);
-      if (ratio > 0.92 || ratio < 0.45) return false;
-
-      const context = [
-        video.className,
-        video.getAttribute("aria-label") || "",
-        video.getAttribute("data-testid") || "",
-        video.getAttribute("sfc-name") || "",
-        video.parentElement?.className || "",
-        video.parentElement?.getAttribute("sfc-name") || "",
-      ].join(" ").toLowerCase();
-
-      return /artwork|animated|motion|album|immersive/.test(context);
+      return video.isConnected &&
+        rect.width >= 120 &&
+        rect.height >= 160 &&
+        rect.width / Math.max(rect.height, 1) <= 0.95 &&
+        video.readyState >= 2;
     })
     .sort((a, b) => {
       const ar = a.getBoundingClientRect();
@@ -80,18 +103,21 @@ function visibleAppleArtworkVideos(): HTMLVideoElement[] {
     });
 }
 
-export function findAppleAnimatedArtworkUrl(): string | null {
+function findAppleAnimatedArtwork(): AppleArtworkSource | null {
+  const visible = visibleAppleArtworkVideos();
+  const visibleVideo = visible[0];
+  if (visibleVideo) {
+    return {
+      video: visibleVideo,
+      url: visibleVideo.currentSrc || visibleVideo.src || undefined,
+    };
+  }
+
   const store = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore?.nowPlayingItem;
   const objectUrls: string[] = [];
   collectObjectUrls(store, objectUrls, new Set());
-
-  const visible = visibleAppleArtworkVideos();
-  for (const video of visible) {
-    const source = video.currentSrc || video.src;
-    if (isMediaUrl(source)) return source;
-  }
-
-  return objectUrls.find(url => /motion|animated|artwork/i.test(url)) || objectUrls[0] || null;
+  const url = objectUrls.find(candidate => /motion|animated|artwork/i.test(candidate)) || objectUrls[0];
+  return url ? { url } : null;
 }
 
 function waitForMediaEvent(media: HTMLMediaElement, event: string, timeoutMs: number) {
@@ -160,24 +186,45 @@ function captureSignature(video: HTMLVideoElement, canvas: HTMLCanvasElement): n
   }
 }
 
-async function captureFrames(video: HTMLVideoElement): Promise<number[][] | null> {
+async function captureProbeFrames(video: HTMLVideoElement): Promise<number[][] | null> {
   const canvas = document.createElement("canvas");
   const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
   const signatures: number[][] = [];
 
-  for (const point of SAMPLE_POINTS) {
-    const target = duration > 0 ? Math.min(duration - 0.05, Math.max(0, duration * point)) : 0;
+  for (let i = 0; i < SAMPLE_COUNT; i++) {
+    const fraction = i / Math.max(1, SAMPLE_COUNT - 1);
+    const target = duration > 0
+      ? Math.min(duration - 0.05, Math.max(0, duration * (0.12 + fraction * 0.76)))
+      : 0;
+
     try {
       if (Math.abs(video.currentTime - target) > 0.04) {
         video.currentTime = target;
         const seeked = await waitForMediaEvent(video, "seeked", PROBE_TIMEOUT_MS);
         if (!seeked) return null;
       }
+
       const signature = captureSignature(video, canvas);
       if (!signature) return null;
       signatures.push(signature);
     } catch {
       return null;
+    }
+  }
+
+  return signatures;
+}
+
+async function captureLiveFrames(video: HTMLVideoElement): Promise<number[][] | null> {
+  const canvas = document.createElement("canvas");
+  const signatures: number[][] = [];
+
+  for (let i = 0; i < SAMPLE_COUNT; i++) {
+    const signature = captureSignature(video, canvas);
+    if (!signature) return null;
+    signatures.push(signature);
+    if (i < SAMPLE_COUNT - 1) {
+      await new Promise(resolve => window.setTimeout(resolve, LIVE_SAMPLE_DELAY_MS));
     }
   }
 
@@ -204,39 +251,42 @@ export async function analyzeCanvasAgainstAppleArtwork(
   canvasUrl: string,
   signal?: AbortSignal
 ): Promise<AppleArtworkAnalysis> {
-  const appleArtworkUrl = findAppleAnimatedArtworkUrl();
-  if (!appleArtworkUrl) {
+  const source = findAppleAnimatedArtwork();
+  if (!source) {
     return { duplicate: false, confidence: 0, reason: "apple-artwork-not-detected" };
   }
 
   if (signal?.aborted) {
-    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl };
+    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
   }
 
-  const [apple, spotify] = await Promise.all([
-    createProbe(appleArtworkUrl),
-    createProbe(canvasUrl),
-  ]);
+  let appleVideo: HTMLVideoElement | null = source.video || null;
+  let probe: HTMLVideoElement | null = null;
+  if (!appleVideo && source.url) {
+    probe = await createProbe(source.url);
+    appleVideo = probe;
+  }
 
-  if (!apple || !spotify) {
-    apple?.remove();
-    spotify?.remove();
-    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl };
+  if (!appleVideo) {
+    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
+  }
+
+  const spotify = await createProbe(canvasUrl);
+  if (!spotify) {
+    probe?.remove();
+    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
   }
 
   try {
     if (signal?.aborted) {
-      return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl };
+      return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
     }
 
-    const appleRatio = apple.videoWidth / Math.max(apple.videoHeight, 1);
+    const appleRatio = appleVideo.videoWidth / Math.max(appleVideo.videoHeight, 1);
     const spotifyRatio = spotify.videoWidth / Math.max(spotify.videoHeight, 1);
-    const appleDuration = Number.isFinite(apple.duration) ? apple.duration : 0;
+    const appleDuration = Number.isFinite(appleVideo.duration) ? appleVideo.duration : 0;
     const spotifyDuration = Number.isFinite(spotify.duration) ? spotify.duration : 0;
 
-    // Apple Music's tall album motion asset is a 3:4 profile. Matching Canvas
-    // may have been cropped for Spotify, so aspect ratio is a supporting signal,
-    // not a hard requirement.
     const ratioClose = Math.abs(appleRatio - spotifyRatio) <= 0.16 ||
       (appleRatio <= 0.84 && spotifyRatio <= 0.84);
     const durationClose = appleDuration > 0 && spotifyDuration > 0
@@ -244,16 +294,21 @@ export async function analyzeCanvasAgainstAppleArtwork(
       : false;
 
     if (!ratioClose) {
-      return { duplicate: false, confidence: 0.25, reason: "insufficient-evidence", appleArtworkUrl };
+      return { duplicate: false, confidence: 0.20, reason: "insufficient-evidence", appleArtworkUrl: source.url };
     }
 
-    const [appleFrames, spotifyFrames] = await Promise.all([
-      captureFrames(apple),
-      captureFrames(spotify),
-    ]);
+    const [appleFrames, spotifyFrames] = source.video
+      ? await Promise.all([
+          captureLiveFrames(appleVideo),
+          captureProbeFrames(spotify),
+        ])
+      : await Promise.all([
+          captureProbeFrames(appleVideo),
+          captureProbeFrames(spotify),
+        ]);
 
     if (!appleFrames || !spotifyFrames) {
-      return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl };
+      return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
     }
 
     const visualSimilarity = sequenceSimilarity(appleFrames, spotifyFrames);
@@ -269,16 +324,16 @@ export async function analyzeCanvasAgainstAppleArtwork(
       duplicate,
       confidence,
       reason: duplicate ? "matched" : "not-similar",
-      appleArtworkUrl,
+      appleArtworkUrl: source.url,
     };
   } finally {
-    apple.remove();
+    probe?.remove();
     spotify.remove();
   }
 }
 
 export const artworkAnalysisInfo = {
-  // Kept small and local because this feature is deliberately fail-open:
-  // when artwork cannot be inspected, Canvas still works normally.
+  // This feature is deliberately fail-open. When artwork cannot be inspected,
+  // Canvas continues working normally.
   timeoutMs: PROBE_TIMEOUT_MS,
 };

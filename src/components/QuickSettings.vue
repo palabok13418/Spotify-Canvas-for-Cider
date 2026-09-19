@@ -10,7 +10,7 @@ const cfg = useConfig();
   <div v-if="open" class="popover" data-canvas-cider-quick-popup="true" role="dialog" aria-label="Canvas for Cider settings">
     <div class="popover-header">
       <div class="title">Canvas Settings</div>
-      <div class="placement-label">{{ cfg.placement === 'lyrics' ? 'Lyrics' : cfg.placement === 'navigation' ? 'Navigation' : 'Mini Player' }}</div>
+      <div class="placement-label">{{ cfg.placement === 'lyrics' ? 'Lyrics' : cfg.placement === 'navigation' ? 'Navigation' : 'Immersive (One)' }}</div>
     </div>
     <CanvasSettingsPanel />
   </div>

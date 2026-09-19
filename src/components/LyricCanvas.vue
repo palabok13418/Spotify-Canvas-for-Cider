@@ -301,36 +301,19 @@ function scheduleSync(reason: string) {
   });
 }
 
-function syncImmersiveHost(host: HTMLElement | null) {
-  if (immersiveHost && immersiveHost !== host) {
-    immersiveHost.classList.remove("canvascider-immersive-host");
-  }
-  immersiveHost = host;
-  if (immersiveHost) immersiveHost.classList.add("canvascider-immersive-host");
-}
-
-function clearImmersiveHost() {
-  if (!immersiveHost) return;
-  immersiveHost.classList.remove("canvascider-immersive-host");
-  immersiveHost = null;
-}
-
-function ensurePortalRoot(host: HTMLElement | null) {
+function ensurePortalRoot() {
   if (!rootEl) {
     rootEl = document.querySelector<HTMLElement>("canvascider-main-canvas");
   }
   if (!rootEl) return false;
 
-  const useImmersiveLayer = cfg.placement === "immersive" && Boolean(host);
-  if (useImmersiveLayer && host) {
-    if (rootEl.parentElement !== host) host.insertBefore(rootEl, host.firstChild);
-    syncImmersiveHost(host);
-  } else {
-    if (rootEl.parentElement !== document.body) document.body.appendChild(rootEl);
-    clearImmersiveHost();
+  // Keep the plugin element under <body> so Cider can rebuild Immersive without
+  // taking the plugin's root element with the old fullscreen DOM.
+  if (rootEl.parentElement !== document.body) {
+    document.body.appendChild(rootEl);
   }
 
-  rootEl.style.setProperty("position", useImmersiveLayer ? "absolute" : "fixed", "important");
+  rootEl.style.setProperty("position", "fixed", "important");
   rootEl.style.setProperty("margin", "0", "important");
   rootEl.style.setProperty("padding", "0", "important");
   rootEl.style.setProperty("pointer-events", "none", "important");
@@ -339,7 +322,7 @@ function ensurePortalRoot(host: HTMLElement | null) {
   rootEl.style.setProperty("width", "0", "important");
   rootEl.style.setProperty("height", "0", "important");
   rootEl.style.setProperty("inset", "auto", "important");
-  rootEl.dataset.canvasPortalOwner = useImmersiveLayer ? "canvas-for-cider-immersive-one" : "canvas-for-cider";
+  rootEl.dataset.canvasPortalOwner = "canvas-for-cider";
 
   portalLayer = rootEl.querySelector<HTMLElement>(".layer");
   videoEl = rootEl.querySelector<HTMLVideoElement>(".video-current");
@@ -436,10 +419,11 @@ function setPortalRectangle(host: HTMLElement) {
   }
 
   if (immersive) {
-    const hostRect = host.getBoundingClientRect();
+    // Give the immersive artwork a soft halo so the Canvas does not have a hard
+    // rectangular edge against Cider's fullscreen background.
     const bleed = Math.max(18, Math.min(r.width, r.height) * 0.10);
-    rootEl.style.setProperty("left", `${Math.round((r.left - hostRect.left - bleed) * 100) / 100}px`, "important");
-    rootEl.style.setProperty("top", `${Math.round((r.top - hostRect.top - bleed) * 100) / 100}px`, "important");
+    rootEl.style.setProperty("left", `${Math.round((r.left - bleed) * 100) / 100}px`, "important");
+    rootEl.style.setProperty("top", `${Math.round((r.top - bleed) * 100) / 100}px`, "important");
     rootEl.style.setProperty("width", `${Math.round((r.width + bleed * 2) * 100) / 100}px`, "important");
     rootEl.style.setProperty("height", `${Math.round((r.height + bleed * 2) * 100) / 100}px`, "important");
     rootEl.style.setProperty("z-index", "1", "important");
@@ -479,7 +463,7 @@ function setPortalRectangle(host: HTMLElement) {
       top: Math.round(r.top),
       width: Math.round(r.width),
       height: Math.round(r.height),
-      portalOwner: immersive ? "immersive-one-artwork-host" : "document.body",
+      portalOwner: "document.body",
     });
   }
   return true;
@@ -491,8 +475,14 @@ async function syncToLyricsTarget(reason: string) {
   try {
     const url = canvasUrl.value;
     const host = findPlacementHost();
-    if (!host || !ensurePortalRoot(host)) return;
 
+    if (!host) {
+      rootEl?.style.setProperty("display", "none", "important");
+      startPersistentLatch(url, reason);
+      return;
+    }
+
+    if (!ensurePortalRoot()) return;
     configureVideo(videoEl!);
     attachPlaybackGuard(videoEl!);
     setVideoSource(url);

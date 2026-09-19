@@ -82,8 +82,14 @@ function clearCanvasForTrackChange(reason: string) {
   log("Canvas lifecycle reset", { reason, sequence });
 }
 
-async function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: string, cached: ResolveResult) {
-  if (!cached.canvasUrl) return false;
+async function applyCachedResult(
+  track: ReturnType<typeof getCurrentTrack>,
+  identity: string,
+  cached: ResolveResult,
+  signal: AbortSignal,
+  expectedSequence: number,
+) {
+  if (!cached.canvasUrl) return;
 
   activeTrackIdentity = identity;
   canvasUrl.value = cached.canvasUrl;
@@ -91,15 +97,7 @@ async function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, iden
   canvasAnalysisPending.value = true;
   canvasSuppressedForAppleArtwork.value = false;
 
-  const cachedAnalysis = await analyzeAndActivate(
-    track,
-    identity,
-    cached,
-    activeAbortController?.signal || new AbortController().signal,
-    sequence,
-  );
-
-  return Boolean(cachedAnalysis || canvasActive.value || canvasSuppressedForAppleArtwork.value);
+  await analyzeAndActivate(track, identity, cached, signal, expectedSequence);
 }
 
 async function analyzeAndActivate(
@@ -162,13 +160,14 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
 
   const cached = cacheGet(expectedIdentity);
   if (cached) {
-    const controller = new AbortController();
     activeAbortController?.abort();
+    const controller = new AbortController();
     activeAbortController = controller;
+    loading = true;
     const seq = ++sequence;
     activeTrackIdentity = expectedIdentity;
     try {
-      await applyCachedResult(track, expectedIdentity, cached);
+      await applyCachedResult(track, expectedIdentity, cached, controller.signal, seq);
     } finally {
       if (activeAbortController === controller) activeAbortController = null;
       if (seq === sequence && expectedIdentity === activeTrackIdentity) {

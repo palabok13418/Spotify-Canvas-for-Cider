@@ -96,6 +96,7 @@ async function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, iden
     identity,
     cached,
     activeAbortController?.signal || new AbortController().signal,
+    sequence,
   );
 
   return Boolean(cachedAnalysis || canvasActive.value || canvasSuppressedForAppleArtwork.value);
@@ -106,6 +107,7 @@ async function analyzeAndActivate(
   identity: string,
   result: ResolveResult,
   signal: AbortSignal,
+  expectedSequence: number,
 ) {
   if (!result.canvasUrl) return;
 
@@ -127,7 +129,7 @@ async function analyzeAndActivate(
     }
   }
 
-  if (signal.aborted || seq !== sequence || identity !== activeTrackIdentity) return;
+  if (signal.aborted || expectedSequence !== sequence || identity !== activeTrackIdentity) return;
 
   canvasAnalysisPending.value = false;
   if (analysis.duplicate) {
@@ -220,7 +222,7 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
     if (data.canvasUrl) {
       cachePut(expectedIdentity, data);
       canvasUrl.value = data.canvasUrl;
-      await analyzeAndActivate(track, expectedIdentity, data, controller.signal);
+      await analyzeAndActivate(track, expectedIdentity, data, controller.signal, seq);
     } else {
       warn("No Canvas URL returned", {
         spotifyTrackId: data.spotifyTrackId,

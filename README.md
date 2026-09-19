@@ -1,345 +1,314 @@
-<p align='center'>
-  <img src='logo.png' alt='Canvas for Cider' width='180'>
+<p align="center">
+  <img src="logo.png" alt="Canvas for Cider" width="180">
 </p>
 
-<h1 align='center'>Canvas for Cider</h1>
+<h1 align="center">Canvas for Cider</h1>
 
-<p align='center'>
+<p align="center">
   Spotify Canvas, but inside Cider.
 </p>
 
-<p align='center'>
-  <a href='https://github.com/palabok13418/Spotify-Canvas-for-Cider/releases'>Releases</a>
+<p align="center">
+  <a href="https://github.com/palabok13418/Spotify-Canvas-for-Cider/releases">Releases</a>
   ·
-  <a href='https://github.com/palabok13418/Spotify-Canvas-for-Cider/issues'>Issues</a>
+  <a href="https://github.com/palabok13418/Spotify-Canvas-for-Cider/issues">Issues</a>
   ·
-  <a href='https://github.com/palabok13418/Spotify-Canvas-for-Cider-API'>Canvas API</a>
+  <a href="https://github.com/palabok13418/Spotify-Canvas-for-Cider-API">Canvas API</a>
 </p>
-
-
 
 ---
 
 ## What is Canvas for Cider?
 
-Canvas for Cider is a Cider PluginKit v4 plugin that displays Spotify Canvas videos while you're listening to Apple Music in Cider.
+Canvas for Cider is a Cider PluginKit v4 plugin that shows Spotify Canvas while you're listening to Apple Music in Cider.
 
-The idea is pretty simple: instead of keeping Canvas somewhere else, the video becomes part of the Cider UI.
+The plugin follows the track loaded in Cider, asks the hosted Canvas API for the matching Spotify Canvas, and then places the video in the part of Cider you selected.
 
-You can put it in three places:
+Current placements:
 
 | Placement | What it does |
 | --- | --- |
-| **Lyrics** | Shows Canvas behind the Lyrics area |
-| **Navigation** | Uses the left navigation area |
-| **Immersive (One)** | Places Canvas on the artwork surface of Cider's One Immersive layout |
+| **Lyrics** | Places Canvas behind the Lyrics area |
+| **Navigation** | Places Canvas in the left navigation area |
+| **Immersive (One)** | Uses a dedicated Cider Immersive layout named **One** |
 
-The plugin follows the track currently playing in Cider, looks for a matching Spotify track, and loads its Canvas when one is available.
-
-## 🔐 Do I need a Spotify token?
+## Do I need a Spotify token?
 
 **No.**
 
-You do not enter a Spotify login or an `sp_dc` token into the plugin.
+The Cider plugin does not ask for an `sp_dc` token and does not store a Spotify session credential.
 
-The plugin sends track metadata to the project's hosted Canvas API. Spotify-side authentication and the Canvas lookup happen there instead, keeping the session credential out of the Cider plugin.
+Spotify authentication stays on the hosted Canvas API. The plugin only sends the current track metadata that Cider already has.
 
 ---
 
-## What you'll see
+## What it does
 
-A few of the things the plugin currently handles:
-
-- 🎬 Spotify Canvas MP4 playback inside Cider
+- 🎬 Spotify Canvas playback inside Cider
 - 📝 Lyrics placement
 - 🧭 Navigation placement
-- 🖼️ Immersive (One) placement
-- ✨ Animated Canvas reveals, transitions, and Immersive spin transitions
-- 🧠 Apple Music animated-artwork duplicate detection so an identical Canvas is suppressed
-- 🔄 A persistent Canvas layer that survives Cider UI changes
-- ⚡ Automatic track-change detection
-- 🧠 Successful-result caching
-- 🛑 Cancellation of stale Canvas lookups
-- 🌫️ Fading and blending so the video doesn't get in the way
-- 🎚️ A Canvas transparency slider, from fully visible to fully transparent
-- 🌈 Lyrics-side ambiance and four-sided Immersive edge blending
-- 🖱️ A non-interactive Canvas layer so normal Cider controls still work
+- 🖼️ Dedicated Immersive **One** layout
+- ✨ Four-point-star Canvas reveal animation
+- 🔄 Animated Canvas-to-Canvas switching
+- 🌠 Fast-spin Immersive entry and reverse exit animation
+- 🧠 Apple Music animated-artwork comparison before showing a duplicate Canvas
+- 🌈 Lyrics-only left-side ambiance
+- 🌫️ Four-sided Immersive edge blending
+- 🎚️ Canvas transparency from visible to transparent
+- ⚡ Track-change detection and stale-request cancellation
+- 💾 Successful Canvas-result caching
+- ▶️ Playback recovery when a Canvas video stalls
 - ♿ Reduced-motion support
-- ⚙️ Quick placement settings from the Lyrics area
-
-There is also recovery logic for cases where the browser or Cider interrupts Canvas playback.
 
 ---
 
 ## How it works
 
-You don't really have to think about the internals when you're using it.
+The normal flow is:
 
-Behind the scenes, the plugin does roughly this:
+1. Cider reports the current Apple Music track.
+2. The plugin collects title, artist, album, ISRC, duration, release year, and other useful metadata.
+3. The plugin sends that metadata to the hosted Canvas API.
+4. The API searches Spotify for the best matching track.
+5. Spotify Canvas data is requested for that track.
+6. Before activation, the plugin checks whether Cider already has matching animated album artwork.
+7. When a different Canvas is needed, the renderer animates the old and new videos instead of abruptly replacing the current image.
+8. The Canvas is shown in Lyrics, Navigation, or the dedicated Immersive One layout.
 
-1. Cider tells the plugin what song is playing.
-2. The plugin collects the useful track metadata Cider already has.
-3. That metadata is sent to the hosted Canvas API.
-4. The API finds the best Spotify track match it can.
-5. Spotify's Canvas data is requested.
-6. The Canvas URL is sent back to Cider.
-7. The plugin puts the video wherever you selected.
+---
 
-Depending on what Cider provides, the lookup can use things like:
+## Canvas placement
 
-- song title
-- artist
-- album
-- album artist
-- ISRC
-- duration
-- release year
-- track number
-- disc number
-- artwork URL
+### Lyrics
 
-No Spotify session credential is sent from the client with that track metadata.
+The main Canvas stays visually unchanged. A separate blurred copy extends **only to the left** of the Canvas rectangle to add a small amount of ambient color to the surrounding main window.
+
+The Canvas itself does not use a whole-video blend mode for this effect.
+
+### Navigation
+
+Canvas is placed in the left navigation area. Navigation text and controls remain interactive.
+
+### Immersive (One)
+
+Immersive placement is implemented as a real Cider custom Immersive layout named **One**, using Cider's PluginKit Immersive Layout API.
+
+This means the plugin does not try to guess an arbitrary fullscreen DOM element and inject Canvas into it.
+
+The Immersive layout has its own centered Canvas surface, a blurred background, and edge blending around all four sides.
+
+---
+
+## Canvas analysis
+
+Some Apple Music releases include tall animated album artwork. Artists can also reuse that artwork as Spotify Canvas.
+
+Canvas for Cider checks for a visible Apple Music animated-artwork video or an animated artwork URL exposed by Cider. It compares sampled video frames with the Spotify Canvas.
+
+When the evidence is strong enough that the two videos are the same artwork, the Spotify Canvas is suppressed so Cider's existing Apple Music artwork does not get duplicated.
+
+The check is deliberately **fail-open**: when the artwork cannot be inspected, normal Canvas playback continues.
+
+---
+
+## Animations
+
+### First appearance
+
+A new Canvas starts as a small four-point star and opens outward until the full Canvas is visible.
+
+### Switching Canvas
+
+When one Canvas changes to another, the incoming Canvas expands from the same star-like shape while the outgoing Canvas fades and softens.
+
+The actual Canvas video is kept separate from the animated reveal mask so the video itself is not zoomed or distorted during the transition.
+
+### Immersive
+
+The dedicated Immersive One layout uses the same four-point-star concept with a fast rotation on entry.
+
+Leaving Immersive reverses that motion by rotating back toward the center while shrinking into the star shape.
 
 ---
 
 ## Settings
 
-There isn't a huge settings page. The main choice is simply where you want Canvas to appear.
+The settings panel currently includes:
 
-### Canvas placement
+- **Lyrics**
+- **Navigation**
+- **Immersive (One)**
 
-Choose:
+It also includes the **Canvas transparency** slider.
 
-**Lyrics** · **Navigation** · **Immersive (One)**
+The Immersive option only refers to the plugin's dedicated **One** Immersive layout.
 
-Immersive placement is deliberately limited to Cider's **One** artwork layout. It does not attempt to inject Canvas into Cider's other Immersive layouts.
+---
 
-The selection is saved through Cider's plugin configuration.
+## Search improvements
 
-### Canvas transparency
+The hosted resolver does not assume that Apple Music and Spotify use the same title.
 
-Use the transparency slider to control how visible the Canvas is. **0%** keeps the Canvas fully visible, while **100%** makes it fully transparent. The change is applied live while you drag the slider and saved when you release it.
+For example, a track can appear as:
 
-### Quick settings
+`KYUBI`
 
-When Cider exposes its Lyrics control, Canvas for Cider adds a small Canvas button beside it. Clicking it opens the placement menu without making you open the full plugin settings page.
+on Apple Music and:
+
+`九尾`
+
+on Spotify.
+
+The resolver now uses several identity paths:
+
+- exact ISRC when available
+- artist and album
+- artist-only fallback
+- title + artist variants
+- duration
+- release year
+- track and disc position
+- Unicode-aware normalization
+- punctuation-safe search values
+
+The resolver also has a secondary Spotify Web API search fallback when the internal Spotify search path does not produce candidates.
+
+This is particularly important for titles written in different scripts.
+
+Punctuation such as:
+
+`- = [ ] \\ ; ' , . / ` ~ ! @ # $ & * ( ) _ + { } | : " < > ?`
+
+is sanitized before it is used to build Spotify search queries.
+
+---
+
+## Hosted Canvas API
+
+Production API:
+
+`https://spotify-canvas-for-cider-api.vercel.app`
+
+Main endpoint:
+
+`POST /api/resolve-canvas`
+
+The backend repository is:
+
+https://github.com/palabok13418/Spotify-Canvas-for-Cider-API
+
+The backend owns Spotify authentication and Canvas retrieval so the client plugin remains credential-free.
 
 ---
 
 ## For developers 🧑‍💻
 
-The plugin is written in **TypeScript**, **Vue**, and **Vite**, and targets **Cider PluginKit v4**.
+The project uses TypeScript, Vue, Vite, and Cider PluginKit v4.
 
-The main architectural split is intentional: the Cider plugin handles the UI and track information, while the hosted API handles Spotify authentication and Canvas lookup.
-
-~~~text
-┌─────────────────────────────┐
-│            Cider            │
-│                             │
-│  Current Apple Music track  │
-└──────────────┬──────────────┘
-               │
-               │ track metadata
-               ▼
-┌─────────────────────────────┐
-│     Canvas API (Vercel)     │
-│                             │
-│  Spotify authentication     │
-│  Track matching             │
-│  Canvas retrieval           │
-└──────────────┬──────────────┘
-               │
-               │ Canvas MP4 URL
-               ▼
-┌─────────────────────────────┐
-│      Canvas for Cider       │
-│                             │
-│  Lyrics / Navigation / Immersive │
-└─────────────────────────────┘
-~~~
-
-### Project layout
-
-~~~text
-Canvas for Cider/
-├── public/
-│   ├── icon.png
-│   ├── logo.png
-│   └── logo.svg
-├── src/
-│   ├── assets/
-│   │   └── logo.svg
-│   ├── components/
-│   │   ├── CanvasSettingsPanel.vue
-│   │   ├── LyricsCanvasButton.vue
-│   │   ├── LyricCanvas.vue
-│   │   ├── Overlay.vue
-│   │   ├── QuickSettings.vue
-│   │   └── Settings.vue
-│   ├── core/
-│   │   └── currentTrack.ts
-│   ├── boot.ts
-│   ├── canvas-api.ts
-│   ├── cider.ts
-│   ├── config.ts
-│   ├── main.ts
-│   ├── plugin.config.ts
-│   ├── search-plan.ts
-│   └── state.ts
-├── scripts/
-│   ├── pack.mjs
-│   └── sanity.mjs
-├── BITCHORD-NOTICE.txt
-├── GPL-3.0.txt
-├── index.html
-├── package.json
-├── tsconfig.app.json
-├── tsconfig.json
-└── vite.config.ts
-~~~
-
-### Good places to start
+### Important files
 
 | File | Purpose |
 | --- | --- |
-| `src/main.ts` | Plugin entry point and registration |
-| `src/components/Overlay.vue` | Track detection, Canvas lookup, caching, and request lifecycle |
-| `src/components/LyricCanvas.vue` | Canvas portal, Lyrics/Navigation/Immersive placement, animations, blending, and playback recovery |
-| `src/artwork-analysis.ts` | Detects matching Apple Music animated artwork before Canvas is shown |
-| `src/components/LyricsCanvasButton.vue` | Adds the Canvas button beside Lyrics |
-| `src/components/CanvasSettingsPanel.vue` | Placement settings |
-| `src/components/QuickSettings.vue` | Quick-settings popup |
-| `src/components/Settings.vue` | Main settings screen |
+| `src/main.ts` | Plugin entry point, custom-element registration, and Immersive layout registration |
+| `src/components/Overlay.vue` | Track detection, Canvas API requests, caching, analysis, and lifecycle |
+| `src/components/LyricCanvas.vue` | Lyrics and Navigation renderer plus Canvas animations |
+| `src/components/ImmersiveCanvasOne.vue` | Dedicated Immersive One renderer |
+| `src/artwork-analysis.ts` | Apple animated-artwork detection and frame comparison |
+| `src/components/CanvasSettingsPanel.vue` | Placement and transparency settings |
+| `src/core/currentTrack.ts` | Current Apple Music/Cider metadata |
 | `src/canvas-api.ts` | Client for the hosted Canvas API |
-| `src/core/currentTrack.ts` | Current Cider/Apple Music metadata |
 | `src/config.ts` | Plugin configuration and persistence |
 | `src/plugin.config.ts` | PluginKit metadata |
 
----
+### Local development
 
-## 🛠️ Run it locally
-
-### Requirements
+Requirements:
 
 - Node.js 20.19+
 - npm
 - Cider with PluginKit v4 support
 
-### Install
+Install dependencies:
 
-~~~bash
+```bash
 npm install
-~~~
+```
 
-### Start the dev server
+Run the development server:
 
-~~~bash
+```bash
 npm run dev
-~~~
+```
 
-The plugin's development server uses:
+The plugin development server uses:
 
-~~~text
-127.0.0.1:3058
-~~~
+`127.0.0.1:3058`
 
-This is only the **Cider plugin** development server. The Spotify/Canvas backend is hosted separately.
+That port is for the **local plugin development server only**. The production Canvas API is separate.
 
-Other useful commands:
+Useful checks:
 
-~~~bash
+```bash
 npm run check
 npm run build
 npm run pack
 npm run sanity
-~~~
+```
 
 ---
 
-## 🔎 Debugging
+## Debugging
 
-The plugin writes useful information to the browser console while it runs.
+The plugin writes useful diagnostics to the Cider browser console, including track changes, API requests, Canvas matching, analysis results, placement changes, and playback recovery.
 
-Depending on what you're debugging, you may see messages about the current track, Canvas API requests, Spotify matching, Canvas availability, placement, cancelled requests after a track change, and playback recovery.
-
-The plugin does not intentionally log the server's Spotify session credential.
+The client does not intentionally log the server's Spotify session credential.
 
 ---
 
-## 🌐 Hosted Canvas API
+## Known limitations
 
-### Cross-language and punctuation matching
+Spotify Canvas availability and the services used to retrieve it can change independently of this project.
 
-The resolver uses multiple search forms rather than trusting the Apple Music title literally. Exact ISRC matching is attempted first when available, followed by sanitized title/artist queries and metadata-only fallbacks using artist, album, duration, and track position. This lets cases such as a Latin-script title like `KYUBI` and a Spotify title in another script such as `九尾` still resolve when the surrounding track metadata agrees.
+Not every Spotify track has a Canvas.
 
-Search input is also sanitized for punctuation and operator-like characters such as `-=[]\\;',./`~!@#Search input is also sanitized for punctuation and operator-like characters such as `-=[]\\;',./`~!@#The production API is:*()_+{}|:"><?` so those characters do not poison the Spotify search query.
+Apple animated-artwork analysis is intentionally conservative. It only suppresses Canvas when the visual evidence is strong enough.
 
-## 🌐 Hosted Canvas API
-
-The production API is:*()_+{}|:"><?` so those characters do not poison the Spotify search query.
-
-## 🌐 Hosted Canvas API
-
-The production API is:
-
-**https://spotify-canvas-for-cider-api.vercel.app**
-
-The main resolver endpoint is:
-
-~~~text
-POST /api/resolve-canvas
-~~~
-
-The backend has its own repository:
-
-**https://github.com/palabok13418/Spotify-Canvas-for-Cider-API**
-
-Keeping the resolver separate is what allows the public Cider plugin to stay credential-free.
+The hosted API also depends on Spotify authentication and internal Spotify behavior, so changes on Spotify's side can affect matching or Canvas retrieval.
 
 ---
 
-## A few things to know
-
-Spotify Canvas is not exposed through a stable public Canvas API that this project controls.
-
-Because this project relies on Spotify services and internal behavior, things can change. Search behavior, authentication, response formats, and Canvas availability may all be affected by changes on Spotify's side.
-
-Also, not every song has a Canvas, so a song having no video is normal.
-
-An internet connection is required for the hosted lookup.
-
----
-
-## 📜 Credits
+## Credits
 
 ### Cider logo
 
-The **Cider logo used as part of the Canvas for Cider plugin logo** is credited to **[cryptofyre](https://github.com/cryptofyre)**.
+The Cider logo used by this project is credited to **[cryptofyre](https://github.com/cryptofyre)**.
 
 ### BitChord
 
-The backend Spotify Web Player authentication approach is based on the **[BitChord](https://github.com/kushagrasinghx/BitChord)** project. The repository includes `BITCHORD-NOTICE.txt` with the relevant notice and attribution.
+The backend Spotify Web Player authentication approach is based on **[BitChord](https://github.com/kushagrasinghx/BitChord)**.
 
 ### Original Canvas API idea
 
-The original idea and early direction for fetching Spotify Canvas data came from **[Paxsenix0/Spotify-Canvas-API](https://github.com/Paxsenix0/Spotify-Canvas-API)**.
+The original Canvas API direction was inspired by **[Paxsenix0/Spotify-Canvas-API](https://github.com/Paxsenix0/Spotify-Canvas-API)**.
 
 ### Development
 
-A lot of the coding, debugging, and README work for this project was done with **[ChatGPT](https://chatgpt.com/)** by OpenAI.
+Development and debugging assistance was provided with **[ChatGPT](https://chatgpt.com/)** by OpenAI.
 
 ### Cider
 
-This plugin is made for [Cider](https://cider.sh/), the Apple Music client.
+This plugin is made for **[Cider](https://cider.sh/)**.
 
-Canvas for Cider is an independent plugin and is not affiliated with or endorsed by Spotify or Apple.
+Canvas for Cider is an independent project and is not affiliated with or endorsed by Spotify or Apple.
 
 ---
 
-## 📄 License
+## License
 
 Canvas for Cider is released under the **GNU General Public License v3.0**.
 
 See [GPL-3.0.txt](GPL-3.0.txt) for the full license text.
 
-<p align='center'><sub>Canvas for Cider · Cider PluginKit v4 · TypeScript · Vue · Vite</sub></p>
+<p align="center">
+  <sub>Canvas for Cider · PluginKit v4 · TypeScript · Vue · Vite</sub>
+</p>

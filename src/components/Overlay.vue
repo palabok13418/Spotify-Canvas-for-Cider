@@ -4,7 +4,15 @@ import { subscribeEvent } from "../cider";
 import { getCurrentTrack, hasCiderTrack } from "../core/currentTrack";
 import { useConfig } from "../config";
 import { resolveCanvasRemote, getCanvasApiBase } from "../canvas-api";
-import { canvasUrl as sharedCanvasUrl, canvasActive } from "../state";
+import {
+  analyzeCanvasAgainstAppleArtwork,
+} from "../artwork-analysis";
+import {
+  canvasUrl as sharedCanvasUrl,
+  canvasActive,
+  canvasAnalysisPending,
+  canvasSuppressedForAppleArtwork,
+} from "../state";
 
 interface ResolveResult {
   spotifyTrackId: string | null;
@@ -69,21 +77,79 @@ function clearCanvasForTrackChange(reason: string) {
   activeTrackIdentity = "";
   canvasUrl.value = "";
   canvasActive.value = false;
+  canvasAnalysisPending.value = false;
+  canvasSuppressedForAppleArtwork.value = false;
   log("Canvas lifecycle reset", { reason, sequence });
 }
 
-function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: string, cached: ResolveResult) {
-  if (!cached.canvasUrl) return false;
+async function applyCachedResult(
+  track: ReturnType<typeof getCurrentTrack>,
+  identity: string,
+  cached: ResolveResult,
+  signal: AbortSignal,
+  expectedSequence: number,
+) {
+  if (!cached.canvasUrl) return;
+
   activeTrackIdentity = identity;
   canvasUrl.value = cached.canvasUrl;
+  canvasActive.value = false;
+  canvasAnalysisPending.value = true;
+  canvasSuppressedForAppleArtwork.value = false;
+
+  await analyzeAndActivate(track, identity, cached, signal, expectedSequence);
+}
+
+async function analyzeAndActivate(
+  track: ReturnType<typeof getCurrentTrack>,
+  identity: string,
+  result: ResolveResult,
+  signal: AbortSignal,
+  expectedSequence: number,
+) {
+  if (!result.canvasUrl) return;
+
+  canvasAnalysisPending.value = true;
+  canvasActive.value = false;
+  canvasSuppressedForAppleArtwork.value = false;
+
+  // Give Cider a moment to finish mounting its animated album artwork before
+  // probing the current artwork video. The analysis is fail-open.
+  await new Promise(resolve => window.setTimeout(resolve, 300));
+  if (signal.aborted) return;
+
+  let analysis = await analyzeCanvasAgainstAppleArtwork(result.canvasUrl!, signal);
+
+  if (analysis.reason === "apple-artwork-not-detected" && !signal.aborted) {
+    await new Promise(resolve => window.setTimeout(resolve, 450));
+    if (!signal.aborted) {
+      analysis = await analyzeCanvasAgainstAppleArtwork(result.canvasUrl!, signal);
+    }
+  }
+
+  if (signal.aborted || expectedSequence !== sequence || identity !== activeTrackIdentity) return;
+
+  canvasAnalysisPending.value = false;
+  if (analysis.duplicate) {
+    canvasSuppressedForAppleArtwork.value = true;
+    canvasActive.value = false;
+    log("Canvas suppressed because Apple Music animated artwork visually matches Spotify Canvas", {
+      trackIdentity: identity,
+      confidence: Number(analysis.confidence.toFixed(3)),
+      sourceDetected: true,
+    });
+    return;
+  }
+
+  canvasSuppressedForAppleArtwork.value = false;
+  canvasUrl.value = result.canvasUrl;
   canvasActive.value = true;
-  log("Canvas cache hit; skipping remote lookup", {
+  log("Canvas artwork analysis complete; Canvas enabled", {
     trackIdentity: identity,
-    spotifyTrackId: cached.spotifyTrackId,
-    matchedTitle: cached.matchedTitle || track.title,
-    matchedArtist: cached.matchedArtist || track.artist,
+    reason: analysis.reason,
+    confidence: Number(analysis.confidence.toFixed(3)),
+    sourceDetected: analysis.reason !== "apple-artwork-not-detected",
   });
-  return true;
 }
 
 async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stableTrackIdentity(track)) {
@@ -94,7 +160,20 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
 
   const cached = cacheGet(expectedIdentity);
   if (cached) {
-    applyCachedResult(track, expectedIdentity, cached);
+    activeAbortController?.abort();
+    const controller = new AbortController();
+    activeAbortController = controller;
+    loading = true;
+    const seq = ++sequence;
+    activeTrackIdentity = expectedIdentity;
+    try {
+      await applyCachedResult(track, expectedIdentity, cached, controller.signal, seq);
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+      if (seq === sequence && expectedIdentity === activeTrackIdentity) {
+        loading = false;
+      }
+    }
     return;
   }
 
@@ -112,6 +191,8 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
   activeTrackIdentity = expectedIdentity;
   canvasUrl.value = "";
   canvasActive.value = false;
+  canvasAnalysisPending.value = false;
+  canvasSuppressedForAppleArtwork.value = false;
 
   log("Canvas API resolver starting", {
     sequence: seq,
@@ -140,12 +221,7 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
     if (data.canvasUrl) {
       cachePut(expectedIdentity, data);
       canvasUrl.value = data.canvasUrl;
-      canvasActive.value = true;
-      log("Canvas URL received from API", {
-        spotifyTrackId: data.spotifyTrackId,
-        trackIdentity: expectedIdentity,
-        hasCanvasUrl: true,
-      });
+      await analyzeAndActivate(track, expectedIdentity, data, controller.signal, seq);
     } else {
       warn("No Canvas URL returned", {
         spotifyTrackId: data.spotifyTrackId,
@@ -155,6 +231,7 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
   } catch (error) {
     if (controller.signal.aborted) return;
     if (seq === sequence && expectedIdentity === activeTrackIdentity) {
+      canvasAnalysisPending.value = false;
       errorLog("resolveCanvas() failed", error);
     } else {
       warn("Ignoring resolver failure for an old song", { expectedIdentity, error: String(error) });
@@ -162,6 +239,9 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
   } finally {
     if (activeAbortController === controller) activeAbortController = null;
     if (seq === sequence && expectedIdentity === activeTrackIdentity) loading = false;
+    if (seq === sequence && expectedIdentity === activeTrackIdentity && !canvasUrl.value) {
+      canvasAnalysisPending.value = false;
+    }
   }
 }
 
@@ -214,6 +294,8 @@ onMounted(() => {
   });
 
   cleanupEvents = [
+    subscribeEvent("immersive:opened", () => scheduleSync()),
+    subscribeEvent("immersive:closed", () => scheduleSync()),
     subscribeEvent("miniplayer:opened", () => scheduleSync()),
     subscribeEvent("miniplayer:closed", () => scheduleSync()),
     subscribeEvent("browser:page_changed", () => scheduleSync()),

@@ -10,118 +10,118 @@ export interface AppleArtworkAnalysis {
   appleArtworkUrl?: string;
 }
 
-const PROBE_TIMEOUT_MS = 2500;
-const SAMPLE_COUNT = 3;
-const LIVE_SAMPLE_DELAY_MS = 160;
+const PROBE_TIMEOUT_MS = 2200;
+const SAMPLE_POINTS = [0.05, 0.25, 0.5, 0.75, 0.95];
 
-type AppleArtworkSource = {
-  video?: HTMLVideoElement;
-  url?: string;
-};
+function normalizeMediaUrl(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
 
 function isMediaUrl(value: string) {
   return /^(https?:|blob:)/i.test(value) &&
-    /.(?:mp4|mov|m4v|m3u8)(?:[?#].*)?$/i.test(value);
+    /\.(?:mp4|mov|m4v|m3u8)(?:[?#].*)?$/i.test(value);
 }
 
-function looksLikeArtworkKey(key: string) {
-  return /animated|motion|artwork|video|asset/i.test(key) && !/audio|preview|podcast/i.test(key);
-}
-
-function collectObjectUrls(value: unknown, output: string[], seen: Set<unknown>, depth = 0) {
-  if (depth > 7 || output.length >= 20 || value === null || value === undefined) return;
+function collectObjectUrls(value: unknown, output: string[], seen: Set<object>, depth = 0) {
+  if (depth > 8 || output.length >= 32 || value === null || value === undefined) return;
 
   if (typeof value === "string") {
-    const candidate = value.trim();
+    const candidate = normalizeMediaUrl(value);
     if (isMediaUrl(candidate) && !output.includes(candidate)) output.push(candidate);
     return;
   }
 
   if (typeof value !== "object") return;
-  if (seen.has(value)) return;
-  seen.add(value);
+  const object = value as object;
+  if (seen.has(object)) return;
+  seen.add(object);
 
   if (Array.isArray(value)) {
-    for (const item of value) collectObjectUrls(item, output, seen, depth + 1);
+    for (const child of value) collectObjectUrls(child, output, seen, depth + 1);
     return;
   }
 
   for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
-    if (typeof child === "string" && looksLikeArtworkKey(key) && isMediaUrl(child)) {
-      if (!output.includes(child)) output.push(child);
+    if (typeof child === "string") {
+      const candidate = normalizeMediaUrl(child);
+      if (/motionDetailTall|motionDetailPortrait|animated|motion|editorialVideo/i.test(key) && isMediaUrl(candidate)) {
+        if (!output.includes(candidate)) output.push(candidate);
+      }
       continue;
     }
-    if (typeof child === "object" && child !== null) {
-      collectObjectUrls(child, output, seen, depth + 1);
-    }
+    collectObjectUrls(child, output, seen, depth + 1);
   }
 }
 
+function tallArtworkRatio(rect: DOMRect | { width: number; height: number }) {
+  return rect.width / Math.max(rect.height, 1);
+}
+
 function visibleAppleArtworkVideos(): HTMLVideoElement[] {
-  const selectors = [
-    "video.animated-artwork-video",
-    "video#animated-artwork",
-  ];
-
-  const candidates = new Set<HTMLElement>();
-  for (const selector of selectors) {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) candidates.add(el);
-  }
-
-  for (const video of document.querySelectorAll<HTMLVideoElement>("video")) {
-    if (video.closest("canvascider-main-canvas")) continue;
-    const rect = video.getBoundingClientRect();
-    if (rect.width < 120 || rect.height < 160) continue;
-    const ratio = rect.width / Math.max(rect.height, 1);
-    if (ratio > 0.95 || ratio < 0.45) continue;
-
-    const context = [
-      video.className,
-      video.getAttribute("aria-label") || "",
-      video.getAttribute("data-testid") || "",
-      video.getAttribute("sfc-name") || "",
-      video.parentElement?.className || "",
-      video.parentElement?.getAttribute("sfc-name") || "",
-    ].join(" ").toLowerCase();
-
-    if (/artwork|animated|motion|album|immersive/.test(context)) candidates.add(video);
-  }
-
-  return [...candidates]
+  return [...document.querySelectorAll<HTMLVideoElement>("video")]
     .filter(video => {
+      if (video.closest("canvascider-main-canvas") || video.classList.contains("canvascider-analysis-probe")) return false;
       const rect = video.getBoundingClientRect();
-      return video.isConnected &&
-        rect.width >= 120 &&
-        rect.height >= 160 &&
-        rect.width / Math.max(rect.height, 1) <= 0.95 &&
-        video.readyState >= 2;
+      if (rect.width < 110 || rect.height < 160) return false;
+
+      const ratio = tallArtworkRatio(rect);
+      if (ratio > 0.92 || ratio < 0.42) return false;
+
+      const context = [
+        video.id,
+        typeof video.className === "string" ? video.className : "",
+        video.getAttribute("aria-label") || "",
+        video.getAttribute("data-testid") || "",
+        video.getAttribute("sfc-name") || "",
+        video.parentElement?.className || "",
+        video.parentElement?.getAttribute("sfc-name") || "",
+      ].join(" ").toLowerCase();
+
+      return /animated.?artwork|animated artwork|motion|artwork|album|immersive/.test(context);
     })
     .sort((a, b) => {
       const ar = a.getBoundingClientRect();
       const br = b.getBoundingClientRect();
-      return (br.width * br.height) - (ar.width * ar.height);
+      return br.width * br.height - ar.width * ar.height;
     });
 }
 
-function findAppleAnimatedArtwork(): AppleArtworkSource | null {
-  const visible = visibleAppleArtworkVideos();
-  const visibleVideo = visible[0];
-  if (visibleVideo) {
-    return {
-      video: visibleVideo,
-      url: visibleVideo.currentSrc || visibleVideo.src || undefined,
-    };
-  }
-
-  const store = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore?.nowPlayingItem;
-  const objectUrls: string[] = [];
-  collectObjectUrls(store, objectUrls, new Set());
-  const url = objectUrls.find(candidate => /motion|animated|artwork/i.test(candidate)) || objectUrls[0];
-  return url ? { url } : null;
+function findAppleAnimatedArtworkVideo() {
+  return visibleAppleArtworkVideos()[0] || null;
 }
 
-function waitForMediaEvent(media: HTMLMediaElement, event: string, timeoutMs: number) {
-  return new Promise<boolean>(resolve => {
+export function findAppleAnimatedArtworkUrl(): string | null {
+  const item = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore?.nowPlayingItem;
+  const candidates: string[] = [];
+
+  const attrs = item?.attributes || item || {};
+  const editorialVideo = attrs?.editorialVideo;
+  const preferred = [
+    editorialVideo?.motionDetailTall?.video,
+    editorialVideo?.motionDetailPortrait?.video,
+    editorialVideo?.motionDetailSquare?.video,
+  ];
+
+  for (const value of preferred) {
+    const url = normalizeMediaUrl(value);
+    if (isMediaUrl(url) && !candidates.includes(url)) candidates.push(url);
+  }
+
+  collectObjectUrls(item, candidates, new Set());
+
+  const visible = findAppleAnimatedArtworkVideo();
+  const visibleSource = visible ? normalizeMediaUrl(visible.currentSrc || visible.src) : "";
+  if (isMediaUrl(visibleSource)) return visibleSource;
+
+  return candidates[0] || null;
+}
+
+function waitForMediaEvent(
+  media: HTMLMediaElement,
+  event: string,
+  timeoutMs: number,
+): Promise<boolean> {
+  return new Promise(resolve => {
     if ((event === "loadedmetadata" && media.readyState >= 1) ||
         (event === "canplay" && media.readyState >= 3)) {
       resolve(true);
@@ -129,6 +129,7 @@ function waitForMediaEvent(media: HTMLMediaElement, event: string, timeoutMs: nu
     }
 
     let settled = false;
+    const onEvent = () => finish(true);
     const finish = (ok: boolean) => {
       if (settled) return;
       settled = true;
@@ -136,28 +137,29 @@ function waitForMediaEvent(media: HTMLMediaElement, event: string, timeoutMs: nu
       window.clearTimeout(timer);
       resolve(ok);
     };
-    const onEvent = () => finish(true);
     const timer = window.setTimeout(() => finish(false), timeoutMs);
     media.addEventListener(event, onEvent, { once: true });
   });
 }
 
 async function createProbe(url: string): Promise<HTMLVideoElement | null> {
+  if (!isMediaUrl(url)) return null;
   const video = document.createElement("video");
   video.className = "canvascider-analysis-probe";
   video.muted = true;
   video.playsInline = true;
   video.preload = "auto";
   video.crossOrigin = "anonymous";
-  video.style.cssText = "position:fixed!important;left:-10000px!important;top:-10000px!important;width:2px!important;height:2px!important;opacity:0!important;pointer-events:none!important;";
+  video.style.cssText =
+    "position:fixed!important;left:-10000px!important;top:-10000px!important;" +
+    "width:2px!important;height:2px!important;opacity:0!important;pointer-events:none!important;";
   document.body.appendChild(video);
 
   video.src = url;
   try { video.load(); } catch {}
 
-  const metadataReady = await waitForMediaEvent(video, "loadedmetadata", PROBE_TIMEOUT_MS);
-  const playable = metadataReady && await waitForMediaEvent(video, "canplay", PROBE_TIMEOUT_MS);
-  if (!playable) {
+  if (!await waitForMediaEvent(video, "loadedmetadata", PROBE_TIMEOUT_MS) ||
+      !await waitForMediaEvent(video, "canplay", PROBE_TIMEOUT_MS)) {
     video.remove();
     return null;
   }
@@ -166,8 +168,8 @@ async function createProbe(url: string): Promise<HTMLVideoElement | null> {
 }
 
 function captureSignature(video: HTMLVideoElement, canvas: HTMLCanvasElement): number[] | null {
-  const width = 24;
-  const height = 24;
+  const width = 32;
+  const height = 32;
   canvas.width = width;
   canvas.height = height;
   const ctx = canvas.getContext("2d", { willReadFrequently: true });
@@ -186,22 +188,22 @@ function captureSignature(video: HTMLVideoElement, canvas: HTMLCanvasElement): n
   }
 }
 
-async function captureProbeFrames(video: HTMLVideoElement): Promise<number[][] | null> {
+async function captureFrames(video: HTMLVideoElement): Promise<number[][] | null> {
   const canvas = document.createElement("canvas");
   const duration = Number.isFinite(video.duration) && video.duration > 0 ? video.duration : 0;
   const signatures: number[][] = [];
 
-  for (let i = 0; i < SAMPLE_COUNT; i++) {
-    const fraction = i / Math.max(1, SAMPLE_COUNT - 1);
+  for (const point of SAMPLE_POINTS) {
+    if (!video.isConnected) return null;
     const target = duration > 0
-      ? Math.min(duration - 0.05, Math.max(0, duration * (0.12 + fraction * 0.76)))
+      ? Math.min(Math.max(duration - 0.05, 0), Math.max(0, duration * point))
       : 0;
 
     try {
       if (Math.abs(video.currentTime - target) > 0.04) {
+        const seekPromise = waitForMediaEvent(video, "seeked", PROBE_TIMEOUT_MS);
         video.currentTime = target;
-        const seeked = await waitForMediaEvent(video, "seeked", PROBE_TIMEOUT_MS);
-        if (!seeked) return null;
+        if (!await seekPromise) return null;
       }
 
       const signature = captureSignature(video, canvas);
@@ -215,125 +217,134 @@ async function captureProbeFrames(video: HTMLVideoElement): Promise<number[][] |
   return signatures;
 }
 
-async function captureLiveFrames(video: HTMLVideoElement): Promise<number[][] | null> {
-  const canvas = document.createElement("canvas");
-  const signatures: number[][] = [];
-
-  for (let i = 0; i < SAMPLE_COUNT; i++) {
-    const signature = captureSignature(video, canvas);
-    if (!signature) return null;
-    signatures.push(signature);
-    if (i < SAMPLE_COUNT - 1) {
-      await new Promise(resolve => window.setTimeout(resolve, LIVE_SAMPLE_DELAY_MS));
-    }
-  }
-
-  return signatures;
-}
-
 function frameSimilarity(a: number[], b: number[]) {
   if (a.length !== b.length || !a.length) return 0;
   let error = 0;
   for (let i = 0; i < a.length; i++) error += Math.abs(a[i] - b[i]);
-  const meanError = error / a.length;
-  return Math.max(0, 1 - meanError);
+  return Math.max(0, 1 - error / a.length);
 }
 
 function sequenceSimilarity(a: number[][], b: number[][]) {
   if (!a.length || !b.length) return 0;
-  const rowBestA = a.map(frame => Math.max(...b.map(other => frameSimilarity(frame, other))));
-  const rowBestB = b.map(frame => Math.max(...a.map(other => frameSimilarity(frame, other))));
-  const mean = [...rowBestA, ...rowBestB].reduce((sum, value) => sum + value, 0) / (rowBestA.length + rowBestB.length);
-  return mean;
+  const ab = a.map(frame => Math.max(...b.map(other => frameSimilarity(frame, other))));
+  const ba = b.map(frame => Math.max(...a.map(other => frameSimilarity(frame, other))));
+  const all = [...ab, ...ba];
+  return all.reduce((sum, value) => sum + value, 0) / all.length;
+}
+
+function similarityConfidence(
+  visualSimilarity: number,
+  appleVideo: HTMLVideoElement,
+  canvasVideo: HTMLVideoElement,
+) {
+  const appleRatio = tallArtworkRatio({ width: appleVideo.videoWidth, height: appleVideo.videoHeight });
+  const canvasRatio = tallArtworkRatio({ width: canvasVideo.videoWidth, height: canvasVideo.videoHeight });
+  const ratioClose =
+    Math.abs(appleRatio - canvasRatio) <= 0.16 ||
+    (appleRatio <= 0.84 && canvasRatio <= 0.84);
+
+  const appleDuration = Number.isFinite(appleVideo.duration) ? appleVideo.duration : 0;
+  const canvasDuration = Number.isFinite(canvasVideo.duration) ? canvasVideo.duration : 0;
+  const durationClose = appleDuration > 0 && canvasDuration > 0
+    ? Math.abs(appleDuration - canvasDuration) <= 2.5
+    : false;
+
+  return {
+    ratioClose,
+    durationClose,
+    confidence: Math.min(
+      1,
+      visualSimilarity * 0.78 +
+      (durationClose ? 0.12 : 0) +
+      (ratioClose ? 0.10 : 0),
+    ),
+  };
 }
 
 export async function analyzeCanvasAgainstAppleArtwork(
   canvasUrl: string,
-  signal?: AbortSignal
+  signal?: AbortSignal,
 ): Promise<AppleArtworkAnalysis> {
-  const source = findAppleAnimatedArtwork();
-  if (!source) {
-    return { duplicate: false, confidence: 0, reason: "apple-artwork-not-detected" };
+  const visibleApple = findAppleAnimatedArtworkVideo();
+  const storeItem = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore?.nowPlayingItem;
+  const appleUrl = findAppleAnimatedArtworkUrl();
+
+  if (!visibleApple && !appleUrl) {
+    return {
+      duplicate: false,
+      confidence: 0,
+      reason: "apple-artwork-not-detected",
+    };
   }
 
   if (signal?.aborted) {
-    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
+    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: appleUrl || undefined };
   }
 
-  let appleVideo: HTMLVideoElement | null = source.video || null;
-  let probe: HTMLVideoElement | null = null;
-  if (!appleVideo && source.url) {
-    probe = await createProbe(source.url);
-    appleVideo = probe;
+  let appleVideo = visibleApple;
+  let spotifyVideo: HTMLVideoElement | null = null;
+
+  if (!appleVideo && appleUrl) appleVideo = await createProbe(appleUrl);
+  if (signal?.aborted || !appleVideo) {
+    appleVideo?.remove();
+    return {
+      duplicate: false,
+      confidence: 0,
+      reason: signal?.aborted ? "probe-failed" : "insufficient-evidence",
+      appleArtworkUrl: appleUrl || undefined,
+    };
   }
 
-  if (!appleVideo) {
-    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
-  }
-
-  const spotify = await createProbe(canvasUrl);
-  if (!spotify) {
-    probe?.remove();
-    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
+  spotifyVideo = await createProbe(canvasUrl);
+  if (!spotifyVideo) {
+    if (!visibleApple) appleVideo.remove();
+    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: appleUrl || undefined };
   }
 
   try {
-    if (signal?.aborted) {
-      return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
-    }
-
-    const appleRatio = appleVideo.videoWidth / Math.max(appleVideo.videoHeight, 1);
-    const spotifyRatio = spotify.videoWidth / Math.max(spotify.videoHeight, 1);
-    const appleDuration = Number.isFinite(appleVideo.duration) ? appleVideo.duration : 0;
-    const spotifyDuration = Number.isFinite(spotify.duration) ? spotify.duration : 0;
-
-    const ratioClose = Math.abs(appleRatio - spotifyRatio) <= 0.16 ||
-      (appleRatio <= 0.84 && spotifyRatio <= 0.84);
-    const durationClose = appleDuration > 0 && spotifyDuration > 0
-      ? Math.abs(appleDuration - spotifyDuration) <= 2.5
-      : false;
-
-    if (!ratioClose) {
-      return { duplicate: false, confidence: 0.20, reason: "insufficient-evidence", appleArtworkUrl: source.url };
-    }
-
-    const [appleFrames, spotifyFrames] = source.video
-      ? await Promise.all([
-          captureLiveFrames(appleVideo),
-          captureProbeFrames(spotify),
-        ])
-      : await Promise.all([
-          captureProbeFrames(appleVideo),
-          captureProbeFrames(spotify),
-        ]);
+    const [appleFrames, spotifyFrames] = await Promise.all([
+      captureFrames(appleVideo),
+      captureFrames(spotifyVideo),
+    ]);
 
     if (!appleFrames || !spotifyFrames) {
-      return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: source.url };
+      return {
+        duplicate: false,
+        confidence: 0,
+        reason: "probe-failed",
+        appleArtworkUrl: appleUrl || undefined,
+      };
     }
 
     const visualSimilarity = sequenceSimilarity(appleFrames, spotifyFrames);
-    const confidence = Math.min(
-      1,
-      visualSimilarity * 0.78 +
-      (durationClose ? 0.12 : 0) +
-      (ratioClose ? 0.10 : 0)
-    );
+    const metrics = similarityConfidence(visualSimilarity, appleVideo, spotifyVideo);
 
-    const duplicate = confidence >= 0.90 && visualSimilarity >= 0.88;
+    // Require strong visual agreement. Aspect ratio and duration only reinforce
+    // a visual match; they never declare two unrelated videos identical.
+    const duplicate = metrics.ratioClose &&
+      visualSimilarity >= 0.90 &&
+      metrics.confidence >= 0.92;
+
     return {
       duplicate,
-      confidence,
+      confidence: metrics.confidence,
       reason: duplicate ? "matched" : "not-similar",
-      appleArtworkUrl: source.url,
+      appleArtworkUrl: appleUrl || undefined,
+    };
+  } catch {
+    return {
+      duplicate: false,
+      confidence: 0,
+      reason: "probe-failed",
+      appleArtworkUrl: appleUrl || undefined,
     };
   } finally {
-    probe?.remove();
-    spotify.remove();
+    spotifyVideo.remove();
+    if (!visibleApple) appleVideo.remove();
   }
 }
 
 export const artworkAnalysisInfo = {
-  // This feature is deliberately fail-open. When artwork cannot be inspected,
-  // Canvas continues working normally.
   timeoutMs: PROBE_TIMEOUT_MS,
+  samples: SAMPLE_POINTS.length,
 };

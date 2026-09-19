@@ -2,23 +2,26 @@
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { canvasActive, canvasTransitioning, canvasUrl } from "../state";
 import { useConfig } from "../config";
+import { subscribeEvent } from "../cider";
 
 const cfg = useConfig();
 
 const root = ref<HTMLElement | null>(null);
 const currentUrl = ref("");
 const incomingUrl = ref("");
-const phase = ref<"idle" | "entering" | "switching">("idle");
+const phase = ref<"idle" | "entering" | "switching" | "exiting">("idle");
+const reducedMotionQuery = ref<MediaQueryList | null>(null);
 
 let animationTimer: number | null = null;
 let watchdog: number | null = null;
+let eventCleanup: Array<() => void> = [];
 
-
-const reducedMotionQuery = ref<MediaQueryList | null>(null);
 const reducedMotion = computed(() => Boolean(reducedMotionQuery.value?.matches));
 const visible = computed(() =>
-  Boolean((canvasActive.value || canvasTransitioning.value) &&
-    (currentUrl.value || incomingUrl.value))
+  Boolean(
+    (canvasActive.value || canvasTransitioning.value) &&
+    (currentUrl.value || incomingUrl.value)
+  )
 );
 
 function clearAnimationTimer() {
@@ -29,7 +32,9 @@ function clearAnimationTimer() {
 function setPhase(next: typeof phase.value, duration: number) {
   clearAnimationTimer();
   phase.value = next;
+
   if (next === "idle") return;
+
   animationTimer = window.setTimeout(() => {
     animationTimer = null;
     phase.value = "idle";
@@ -38,6 +43,7 @@ function setPhase(next: typeof phase.value, duration: number) {
 
 async function play(video: HTMLVideoElement | null) {
   if (!video || reducedMotion.value) return;
+
   try {
     video.muted = true;
     video.defaultMuted = true;
@@ -49,8 +55,10 @@ async function play(video: HTMLVideoElement | null) {
 
 async function syncVideos() {
   await nextTick();
+
   const current = root.value?.querySelector<HTMLVideoElement>(".current-video") || null;
   const incoming = root.value?.querySelector<HTMLVideoElement>(".incoming-video") || null;
+
   void play(current);
   void play(incoming);
 }
@@ -67,6 +75,7 @@ function setUrl(url: string) {
   }
 
   if (url === currentUrl.value && !incomingUrl.value) return;
+  if (url === incomingUrl.value) return;
 
   incomingUrl.value = url;
   setPhase("switching", 760);
@@ -74,52 +83,88 @@ function setUrl(url: string) {
 
   clearAnimationTimer();
   animationTimer = window.setTimeout(() => {
+    if (!incomingUrl.value) return;
+
     currentUrl.value = incomingUrl.value;
     incomingUrl.value = "";
     animationTimer = null;
     phase.value = "idle";
+
     void syncVideos();
   }, 760);
 }
 
 watch(
-  [canvasUrl, canvasActive],
-  ([url, active]) => {
-    if (url && active) {
+  [canvasUrl, canvasActive, canvasTransitioning],
+  ([url, active, transitioning]) => {
+    if (url && (active || transitioning)) {
       setUrl(url);
       return;
     }
-    if (!active && !canvasTransitioning.value && !url) {
+
+    if (!url && !active && !transitioning) {
+      clearAnimationTimer();
       currentUrl.value = "";
       incomingUrl.value = "";
-      lastUrl = "";
       phase.value = "idle";
     }
   },
-  { flush: "post" },
+  { flush: "post" }
 );
 
 onMounted(() => {
   reducedMotionQuery.value = window.matchMedia("(prefers-reduced-motion: reduce)");
+  reducedMotionQuery.value.addEventListener?.("change", () => {
+    if (reducedMotion.value) {
+      clearAnimationTimer();
+      phase.value = "idle";
+    }
+  });
+
+  eventCleanup = [
+    subscribeEvent("immersive:opened", () => {
+      if (canvasUrl.value && canvasActive.value) {
+        setPhase("entering", 900);
+        void syncVideos();
+      }
+    }),
+    subscribeEvent("immersive:closed", () => {
+      if (currentUrl.value) {
+        setPhase("exiting", 720);
+      }
+    }),
+  ];
+
   if (canvasUrl.value && canvasActive.value && !reducedMotion.value) {
     setUrl(canvasUrl.value);
   }
 
   watchdog = window.setInterval(() => {
     if (!visible.value) return;
-    syncVideos();
+    void syncVideos();
   }, 1200);
 });
 
 onUnmounted(() => {
   clearAnimationTimer();
   if (watchdog !== null) window.clearInterval(watchdog);
+  eventCleanup.forEach(fn => fn());
+  eventCleanup = [];
   reducedMotionQuery.value = null;
 });
 </script>
 
 <template>
-  <div ref="root" class="one-layout" :class="[phase, { visible }]" :style="{ opacity: visible ? (1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100) : 0 }">
+  <div
+    ref="root"
+    class="one-layout"
+    :class="[phase, { visible }]"
+    :style="{
+      opacity: visible
+        ? (1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100)
+        : 0
+    }"
+  >
     <div class="background">
       <video
         v-if="currentUrl"
@@ -137,27 +182,29 @@ onUnmounted(() => {
 
     <div class="canvas-frame">
       <div class="canvas-stage">
-        <video
-          v-if="currentUrl"
-          class="current-video"
-          :src="currentUrl"
-          muted
-          loop
-          playsinline
-          preload="auto"
-          :autoplay="!reducedMotion"
-        ></video>
+        <div v-if="currentUrl" class="video-shell current-shell">
+          <video
+            class="current-video"
+            :src="currentUrl"
+            muted
+            loop
+            playsinline
+            preload="auto"
+            :autoplay="!reducedMotion"
+          ></video>
+        </div>
 
-        <video
-          v-if="incomingUrl"
-          class="incoming-video"
-          :src="incomingUrl"
-          muted
-          loop
-          playsinline
-          preload="auto"
-          :autoplay="!reducedMotion"
-        ></video>
+        <div v-if="incomingUrl" class="video-shell incoming-shell">
+          <video
+            class="incoming-video"
+            :src="incomingUrl"
+            muted
+            loop
+            playsinline
+            preload="auto"
+            :autoplay="!reducedMotion"
+          ></video>
+        </div>
       </div>
     </div>
   </div>
@@ -173,11 +220,7 @@ onUnmounted(() => {
   overflow:hidden;
   background:transparent;
   pointer-events:none;
-  opacity:0;
-  transition:opacity .2s ease;
 }
-
-.one-layout.visible{opacity:1}
 
 .background{
   position:absolute;
@@ -201,8 +244,8 @@ onUnmounted(() => {
   inset:0;
   background:
     radial-gradient(ellipse at center,rgba(255,255,255,.05),transparent 46%),
-    linear-gradient(to right,rgba(0,0,0,.20),transparent 22%,transparent 78%,rgba(0,0,0,.20)),
-    linear-gradient(to bottom,rgba(0,0,0,.22),transparent 22%,transparent 78%,rgba(0,0,0,.22));
+    linear-gradient(to right,rgba(0,0,0,.18),transparent 24%,transparent 76%,rgba(0,0,0,.18)),
+    linear-gradient(to bottom,rgba(0,0,0,.18),transparent 24%,transparent 76%,rgba(0,0,0,.18));
 }
 
 .canvas-frame{
@@ -216,10 +259,16 @@ onUnmounted(() => {
   transform:translate(-50%,-50%);
   overflow:visible;
   border-radius:28px;
-  box-shadow:0 28px 90px rgba(0,0,0,.45);
 }
 
 .canvas-stage{
+  position:absolute;
+  inset:0;
+  overflow:visible;
+  border-radius:inherit;
+}
+
+.video-shell{
   position:absolute;
   inset:0;
   overflow:hidden;
@@ -227,108 +276,131 @@ onUnmounted(() => {
   isolation:isolate;
 }
 
+.current-shell{z-index:2}
+.incoming-shell{z-index:3}
+
 .current-video,
 .incoming-video{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
-  object-fit:cover;
   display:block;
+  object-fit:cover;
   border-radius:inherit;
   pointer-events:none;
   background:transparent;
   filter:saturate(.96) contrast(1.02) brightness(.86);
-  will-change:clip-path,transform,opacity,filter;
+  will-change:clip-path,opacity,filter,transform;
 }
 
-.current-video{opacity:1}
-.incoming-video{opacity:0}
-
-.canvas-frame::before,
-.canvas-frame::after{
-  content:"";
-  position:absolute;
-  pointer-events:none;
-  z-index:4;
+.current-video,
+.incoming-video{
+  opacity:1;
 }
 
 .canvas-frame::before{
+  content:"";
+  position:absolute;
   inset:-16% -20%;
-  border-radius:36px;
+  border-radius:42px;
+  pointer-events:none;
+  z-index:1;
   background:
-    linear-gradient(to bottom,rgba(0,0,0,.25),transparent 20%,transparent 80%,rgba(0,0,0,.25)),
-    linear-gradient(to right,rgba(0,0,0,.24),transparent 18%,transparent 82%,rgba(0,0,0,.24));
-  filter:blur(22px);
-  opacity:.78;
+    radial-gradient(ellipse at center,rgba(255,255,255,.05),transparent 56%),
+    linear-gradient(to right,transparent 0%,rgba(0,0,0,.22) 18%,transparent 32%,transparent 68%,rgba(0,0,0,.22) 82%,transparent 100%),
+    linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.22) 18%,transparent 32%,transparent 68%,rgba(0,0,0,.22) 82%,transparent 100%);
+  filter:blur(24px);
   mix-blend-mode:multiply;
-}
-
-.canvas-frame::after{
-  inset:-2px;
-  border-radius:30px;
-  box-shadow:
-    inset 0 0 38px rgba(0,0,0,.26),
-    inset 0 0 18px rgba(255,255,255,.04);
+  opacity:.9;
 }
 
 @keyframes one-star-open{
   0%{
-    clip-path:polygon(50% 42%,52% 49%,75% 50%,52% 51%,50% 58%,48% 51%,25% 50%,48% 49%);
-    transform:scale(.28) rotate(720deg);
+    clip-path:polygon(
+      50% 42%,52% 49%,75% 50%,52% 51%,
+      50% 58%,48% 51%,25% 50%,48% 49%
+    );
     opacity:0;
-    filter:blur(9px) saturate(.84) brightness(.72);
   }
-  22%{
-    clip-path:polygon(50% 20%,54% 46%,80% 50%,54% 54%,50% 80%,46% 54%,20% 50%,46% 46%);
-    transform:scale(.56) rotate(390deg);
-    opacity:.34;
-    filter:blur(4px) saturate(.90) brightness(.78);
+  28%{
+    clip-path:polygon(
+      50% 24%,54% 47%,78% 50%,54% 53%,
+      50% 76%,46% 53%,22% 50%,46% 47%
+    );
+    opacity:.50;
   }
-  55%{
-    clip-path:polygon(50% 4%,55% 45%,96% 50%,55% 55%,50% 96%,45% 55%,4% 50%,45% 45%);
-    transform:scale(.86) rotate(70deg);
-    opacity:.82;
-    filter:blur(1px) saturate(.94) brightness(.83);
-  }
-  80%{
-    clip-path:inset(0 0 0 0 round 28px);
-    transform:scale(1.01) rotate(8deg);
-    opacity:.98;
+  60%{
+    clip-path:polygon(
+      50% 4%,55% 45%,96% 50%,55% 55%,
+      50% 96%,45% 55%,4% 50%,45% 45%
+    );
+    opacity:.92;
   }
   100%{
     clip-path:inset(0 0 0 0 round 28px);
-    transform:scale(1) rotate(0);
     opacity:1;
-    filter:saturate(.96) contrast(1.02) brightness(.86);
   }
 }
 
 @keyframes one-switch-in{
   0%{
-    clip-path:polygon(50% 42%,52% 49%,75% 50%,52% 51%,50% 58%,48% 51%,25% 50%,48% 49%);
-    transform:scale(.92);
+    clip-path:polygon(
+      50% 42%,52% 49%,75% 50%,52% 51%,
+      50% 58%,48% 51%,25% 50%,48% 49%
+    );
     opacity:0;
-    filter:blur(8px) saturate(.84) brightness(.72);
   }
-  45%{
-    clip-path:polygon(50% 20%,54% 46%,80% 50%,54% 54%,50% 80%,46% 54%,20% 50%,46% 46%);
-    transform:scale(1.012);
-    opacity:.70;
-    filter:blur(3px) saturate(.90) brightness(.78);
+  40%{
+    clip-path:polygon(
+      50% 22%,54% 46%,82% 50%,54% 54%,
+      50% 78%,46% 54%,18% 50%,46% 46%
+    );
+    opacity:.56;
   }
   100%{
     clip-path:inset(0 0 0 0 round 28px);
-    transform:scale(1);
     opacity:1;
-    filter:saturate(.96) contrast(1.02) brightness(.86);
   }
 }
 
 @keyframes one-switch-out{
-  0%{opacity:1;transform:scale(1);filter:saturate(.96) contrast(1.02) brightness(.86)}
-  50%{opacity:.42;transform:scale(1.02);filter:blur(2px) saturate(.90) brightness(.78)}
-  100%{opacity:0;transform:scale(1.035);filter:blur(7px) saturate(.84) brightness(.72)}
+  0%{opacity:1}
+  50%{opacity:.42;filter:blur(2px) saturate(.90) brightness(.78)}
+  100%{opacity:0;filter:blur(7px) saturate(.84) brightness(.72)}
+}
+
+@keyframes one-exit{
+  0%{
+    clip-path:inset(0 0 0 0 round 28px);
+    transform:rotate(0deg);
+    opacity:1;
+  }
+  36%{
+    clip-path:polygon(
+      50% 24%,54% 47%,78% 50%,54% 53%,
+      50% 76%,46% 53%,22% 50%,46% 47%
+    );
+    transform:rotate(-360deg);
+    opacity:.68;
+  }
+  72%{
+    clip-path:polygon(
+      50% 40%,53% 48%,62% 50%,53% 52%,
+      50% 60%,47% 52%,38% 50%,47% 48%
+    );
+    transform:rotate(-620deg);
+    opacity:.28;
+  }
+  100%{
+    clip-path:polygon(
+      50% 44%,52% 49%,57% 50%,52% 51%,
+      50% 56%,48% 51%,43% 50%,48% 49%
+    );
+    transform:rotate(-720deg) scale(.24);
+    opacity:0;
+    filter:blur(9px) saturate(.82) brightness(.70);
+  }
 }
 
 .one-layout.entering .current-video{
@@ -336,12 +408,15 @@ onUnmounted(() => {
 }
 
 .one-layout.switching .incoming-video{
-  animation:one-switch-in 760ms cubic-bezier(.18,.76,.20,1) both;
-  opacity:1;
+  animation:one-switch-in 760ms cubic-bezier(.18,.78,.20,1) both;
 }
 
 .one-layout.switching .current-video{
   animation:one-switch-out 760ms cubic-bezier(.20,.72,.18,1) both;
+}
+
+.one-layout.exiting .current-video{
+  animation:one-exit 720ms cubic-bezier(.18,.74,.18,1) both;
 }
 
 @media (max-width:900px){
@@ -353,8 +428,7 @@ onUnmounted(() => {
 }
 
 @media (prefers-reduced-motion:reduce){
-  .one-layout,.current-video,.incoming-video{animation:none!important;transition:none!important}
-  .current-video{opacity:1!important}
-  .incoming-video{opacity:1!important}
+  .one-layout,.current-video,.incoming-video{animation:none!important}
+  .current-video,.incoming-video{opacity:1!important}
 }
 </style>

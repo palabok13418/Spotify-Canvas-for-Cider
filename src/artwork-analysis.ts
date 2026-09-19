@@ -217,6 +217,30 @@ async function captureFrames(video: HTMLVideoElement): Promise<number[][] | null
   return signatures;
 }
 
+async function captureVisiblePlaybackFrames(
+  video: HTMLVideoElement,
+  signal?: AbortSignal,
+): Promise<number[][] | null> {
+  const canvas = document.createElement("canvas");
+  const signatures: number[][] = [];
+
+  // Never seek Cider's real animated-artwork video. Sampling its current playback
+  // position avoids jumping the user's artwork or fighting Cider's player.
+  for (let i = 0; i < SAMPLE_POINTS.length; i++) {
+    if (signal?.aborted || !video.isConnected) return null;
+
+    const signature = captureSignature(video, canvas);
+    if (!signature) return null;
+    signatures.push(signature);
+
+    if (i < SAMPLE_POINTS.length - 1) {
+      await new Promise(resolve => window.setTimeout(resolve, 110));
+    }
+  }
+
+  return signatures;
+}
+
 function frameSimilarity(a: number[], b: number[]) {
   if (a.length !== b.length || !a.length) return 0;
   let error = 0;
@@ -301,10 +325,10 @@ export async function analyzeCanvasAgainstAppleArtwork(
   }
 
   try {
-    const [appleFrames, spotifyFrames] = await Promise.all([
-      captureFrames(appleVideo),
-      captureFrames(spotifyVideo),
-    ]);
+    const appleFrames = visibleApple
+      ? await captureVisiblePlaybackFrames(appleVideo, signal)
+      : await captureFrames(appleVideo);
+    const spotifyFrames = await captureFrames(spotifyVideo);
 
     if (!appleFrames || !spotifyFrames) {
       return {

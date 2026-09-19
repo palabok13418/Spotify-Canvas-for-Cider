@@ -272,7 +272,11 @@ The plugin does not intentionally log the server's Spotify session credential.
 
 The resolver uses multiple search forms rather than trusting the Apple Music title literally. Exact ISRC matching is attempted first when available, followed by sanitized title/artist queries and metadata-only fallbacks using artist, album, duration, and track position. This lets cases such as a Latin-script title like `KYUBI` and a Spotify title in another script such as `九尾` still resolve when the surrounding track metadata agrees.
 
-Search input is also sanitized for punctuation and operator-like characters such as `-=[]\\;',./`~!@#The production API is:*()_+{}|:"><?` so those characters do not poison the Spotify search query.
+Search input is also sanitized for punctuation and operator-like characters such as `-=[]\\;',./`~!@#Search input is also sanitized for punctuation and operator-like characters such as `-=[]\\;',./`~!@#The production API is:*()_+{}|:"><?` so those characters do not poison the Spotify search query.
+
+## 🌐 Hosted Canvas API
+
+The production API is:*()_+{}|:"><?` so those characters do not poison the Spotify search query.
 
 ## 🌐 Hosted Canvas API
 

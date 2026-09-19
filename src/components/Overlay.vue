@@ -82,20 +82,23 @@ function clearCanvasForTrackChange(reason: string) {
   log("Canvas lifecycle reset", { reason, sequence });
 }
 
-function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: string, cached: ResolveResult) {
+async function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: string, cached: ResolveResult) {
   if (!cached.canvasUrl) return false;
+
   activeTrackIdentity = identity;
   canvasUrl.value = cached.canvasUrl;
-  canvasActive.value = true;
-  canvasAnalysisPending.value = false;
+  canvasActive.value = false;
+  canvasAnalysisPending.value = true;
   canvasSuppressedForAppleArtwork.value = false;
-  log("Canvas cache hit; skipping remote lookup", {
-    trackIdentity: identity,
-    spotifyTrackId: cached.spotifyTrackId,
-    matchedTitle: cached.matchedTitle || track.title,
-    matchedArtist: cached.matchedArtist || track.artist,
-  });
-  return true;
+
+  const cachedAnalysis = await analyzeAndActivate(
+    track,
+    identity,
+    cached,
+    activeAbortController?.signal || new AbortController().signal,
+  );
+
+  return Boolean(cachedAnalysis || canvasActive.value || canvasSuppressedForAppleArtwork.value);
 }
 
 async function analyzeAndActivate(
@@ -157,7 +160,19 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
 
   const cached = cacheGet(expectedIdentity);
   if (cached) {
-    applyCachedResult(track, expectedIdentity, cached);
+    const controller = new AbortController();
+    activeAbortController?.abort();
+    activeAbortController = controller;
+    const seq = ++sequence;
+    activeTrackIdentity = expectedIdentity;
+    try {
+      await applyCachedResult(track, expectedIdentity, cached);
+    } finally {
+      if (activeAbortController === controller) activeAbortController = null;
+      if (seq === sequence && expectedIdentity === activeTrackIdentity) {
+        loading = false;
+      }
+    }
     return;
   }
 

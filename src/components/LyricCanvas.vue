@@ -221,9 +221,41 @@ function readImmersiveStyleFromConfig(): boolean | null {
     cider?.config?.immersive?.layout,
   ];
 
+  values.push(
+    cider?.config?.visual?.immersive?.mode,
+    cider?.config?.immersive?.mode,
+    cider?.config?.immersiveMode,
+  );
+
   for (const value of values) {
     if (typeof value !== "string" || !value.trim()) continue;
     return normalizeImmersiveMode(value) === "one";
+  }
+
+  // Some Cider builds keep the selected immersive style one level deeper.
+  const queue: Array<{ value: unknown; depth: number }> = [{ value: cider?.config, depth: 0 }];
+  const seen = new Set<object>();
+  while (queue.length) {
+    const entry = queue.shift()!;
+    if (entry.depth > 4 || !entry.value || typeof entry.value !== "object") continue;
+    const object = entry.value as object;
+    if (seen.has(object)) continue;
+    seen.add(object);
+
+    for (const [key, child] of Object.entries(entry.value as Record<string, unknown>)) {
+      if (/(immersive.*(style|layout|mode)|(style|layout|mode).*immersive)/i.test(key)) {
+        if (typeof child === "string" && child.trim()) {
+          return normalizeImmersiveMode(child) === "one";
+        }
+        if (child && typeof child === "object") {
+          const named = (child as any).name ?? (child as any).id ?? (child as any).value;
+          if (typeof named === "string" && named.trim()) {
+            return normalizeImmersiveMode(named) === "one";
+          }
+        }
+      }
+      if (child && typeof child === "object") queue.push({ value: child, depth: entry.depth + 1 });
+    }
   }
   return null;
 }
@@ -627,7 +659,7 @@ onMounted(() => {
   reducedMotionQuery.value = window.matchMedia("(prefers-reduced-motion: reduce)");
   reducedMotionQuery.value.addEventListener?.("change", handleMotionChange);
 
-  const cleanup = [
+  eventCleanup = [
     subscribeEvent("immersive:opened", () => {
       immersiveOpenByEvent = true;
       if (cfg.placement === "immersive") setPhase("immersive-enter", 900);
@@ -686,10 +718,6 @@ onMounted(() => {
     scheduleSync("initial mount");
   }
 
-  (onUnmounted as any).call(null);
-  // The actual Vue unmount cleanup is registered below through lifecycle state.
-  (cleanup as (() => void)[]);
-  (cleanup as any).__canvasCleanup = cleanup;
 });
 
 onUnmounted(() => {
@@ -700,6 +728,8 @@ onUnmounted(() => {
   resizeObserver?.disconnect();
   if (playbackWatchdog !== null) window.clearInterval(playbackWatchdog);
   reducedMotionQuery.value?.removeEventListener?.("change", handleMotionChange);
+  eventCleanup.forEach(fn => fn());
+  eventCleanup = [];
   document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast").forEach(el => el.classList.remove("canvascider-navigation-contrast"));
   clearRenderedCanvas();
   rootEl = null;

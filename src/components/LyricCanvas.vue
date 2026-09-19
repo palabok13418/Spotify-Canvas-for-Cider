@@ -637,7 +637,7 @@ onMounted(() => {
   ];
   reducedMotionQuery.addEventListener?.("change", handleMotionChange);
 
-  ensurePortalRoot(null);
+  ensurePortalRoot();
   if (videoEl) {
     configureVideo(videoEl);
     attachPlaybackGuard(videoEl);

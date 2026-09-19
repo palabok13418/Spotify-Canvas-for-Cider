@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onMounted, onUnmounted, ref, watch } from "vue";
 import { canvasActive, canvasTransitioning, canvasUrl } from "../state";
+import { useConfig } from "../config";
+
+const cfg = useConfig();
 
 const root = ref<HTMLElement | null>(null);
 const currentUrl = ref("");
@@ -126,7 +129,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div ref="root" class="one-layout" :class="[phase, { visible }]">
+  <div ref="root" class="one-layout" :class="[phase, { visible }]" :style="{ opacity: visible ? (1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100) : 0 }">
     <div class="background">
       <video
         v-if="currentUrl"
@@ -261,7 +264,7 @@ onUnmounted(() => {
 }
 
 .canvas-frame::before{
-  inset:-14% -18%;
+  inset:-16% -20%;
   border-radius:36px;
   background:
     linear-gradient(to bottom,rgba(0,0,0,.25),transparent 20%,transparent 80%,rgba(0,0,0,.25)),

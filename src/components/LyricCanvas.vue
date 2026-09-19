@@ -567,7 +567,7 @@ function triggerAnimation(kind: "enter" | "switch" | "immersive-enter" | "immers
   if (animationTimer !== null) window.clearTimeout(animationTimer);
   animationTimer = window.setTimeout(() => {
     animationState.value = "idle";
-    if (kind !== "switch") previousCanvasUrl.value = "";
+    previousCanvasUrl.value = "";
   }, kind === "switch" ? 900 : 820);
 }
 

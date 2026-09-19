@@ -4,12 +4,11 @@ import { subscribeEvent } from "../cider";
 import { getCurrentTrack, hasCiderTrack } from "../core/currentTrack";
 import { useConfig } from "../config";
 import { resolveCanvasRemote, getCanvasApiBase } from "../canvas-api";
-import {
-  analyzeCanvasAgainstAppleArtwork,
-} from "../artwork-analysis";
+import { analyzeCanvasAgainstAppleArtwork } from "../artwork-analysis";
 import {
   canvasUrl as sharedCanvasUrl,
   canvasActive,
+  canvasTransitioning,
   canvasAnalysisPending,
   canvasSuppressedForAppleArtwork,
 } from "../state";
@@ -28,6 +27,7 @@ const canvasUrl = sharedCanvasUrl;
 const debugPrefix = "[Canvas for Cider]";
 
 const positiveCanvasCache = new Map<string, ResolveResult>();
+const analysisCache = new Map<string, boolean>();
 const CACHE_LIMIT = 48;
 
 function log(...args: any[]) { console.log(debugPrefix, ...args); }
@@ -43,6 +43,7 @@ let cleanupEvents: Array<() => void> = [];
 let lastLoggedTrackKey = "";
 let scheduledSync: number | null = null;
 let activeAbortController: AbortController | null = null;
+let fadeOldCanvasTimer: number | null = null;
 
 function stableTrackIdentity(t: ReturnType<typeof getCurrentTrack>) {
   const strong = t.appleId || t.catalogId || t.isrc;
@@ -69,71 +70,112 @@ function cacheGet(identity: string) {
   return result;
 }
 
+function clearFadeOldCanvasTimer() {
+  if (fadeOldCanvasTimer !== null) window.clearTimeout(fadeOldCanvasTimer);
+  fadeOldCanvasTimer = null;
+}
+
 function clearCanvasForTrackChange(reason: string) {
   sequence++;
   activeAbortController?.abort();
   activeAbortController = null;
   loading = false;
+
+  clearFadeOldCanvasTimer();
   activeTrackIdentity = "";
-  canvasUrl.value = "";
   canvasActive.value = false;
   canvasAnalysisPending.value = false;
   canvasSuppressedForAppleArtwork.value = false;
+
+  if (canvasUrl.value) {
+    // Keep the previous Canvas alive briefly. LyricCanvas uses this period to
+    // animate the outgoing artwork instead of abruptly clearing the video.
+    canvasTransitioning.value = true;
+    fadeOldCanvasTimer = window.setTimeout(() => {
+      if (!canvasActive.value && canvasTransitioning.value) {
+        canvasTransitioning.value = false;
+        canvasUrl.value = "";
+      }
+      fadeOldCanvasTimer = null;
+    }, 3600);
+  } else {
+    canvasTransitioning.value = false;
+  }
+
   log("Canvas lifecycle reset", { reason, sequence });
 }
 
-async function applyCachedResult(
-  track: ReturnType<typeof getCurrentTrack>,
-  identity: string,
-  cached: ResolveResult,
-  signal: AbortSignal,
-  expectedSequence: number,
-) {
-  if (!cached.canvasUrl) return;
-
+function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: string, cached: ResolveResult) {
+  if (!cached.canvasUrl) return false;
+  clearFadeOldCanvasTimer();
   activeTrackIdentity = identity;
   canvasUrl.value = cached.canvasUrl;
-  canvasActive.value = false;
-  canvasAnalysisPending.value = true;
+  canvasActive.value = true;
+  canvasTransitioning.value = false;
+  canvasAnalysisPending.value = false;
   canvasSuppressedForAppleArtwork.value = false;
-
-  await analyzeAndActivate(track, identity, cached, signal, expectedSequence);
+  log("Canvas cache hit; skipping remote lookup", {
+    trackIdentity: identity,
+    spotifyTrackId: cached.spotifyTrackId,
+    matchedTitle: cached.matchedTitle || track.title,
+    matchedArtist: cached.matchedArtist || track.artist,
+  });
+  return true;
 }
 
 async function analyzeAndActivate(
-  track: ReturnType<typeof getCurrentTrack>,
   identity: string,
   result: ResolveResult,
   signal: AbortSignal,
-  expectedSequence: number,
 ) {
   if (!result.canvasUrl) return;
 
+  const cachedDecision = analysisCache.get(identity);
+  if (cachedDecision !== undefined) {
+    canvasAnalysisPending.value = false;
+    canvasSuppressedForAppleArtwork.value = cachedDecision;
+    canvasTransitioning.value = false;
+    canvasActive.value = !cachedDecision;
+    if (cachedDecision) canvasUrl.value = result.canvasUrl;
+    return;
+  }
+
   canvasAnalysisPending.value = true;
   canvasActive.value = false;
-  canvasSuppressedForAppleArtwork.value = false;
 
-  // Give Cider a moment to finish mounting its animated album artwork before
-  // probing the current artwork video. The analysis is fail-open.
-  await new Promise(resolve => window.setTimeout(resolve, 300));
+  // Let Cider finish mounting its animated artwork before sampling it.
+  await new Promise(resolve => window.setTimeout(resolve, 250));
   if (signal.aborted) return;
 
-  let analysis = await analyzeCanvasAgainstAppleArtwork(result.canvasUrl!, signal);
+  let analysis = await analyzeCanvasAgainstAppleArtwork(result.canvasUrl, signal);
 
   if (analysis.reason === "apple-artwork-not-detected" && !signal.aborted) {
-    await new Promise(resolve => window.setTimeout(resolve, 450));
+    await new Promise(resolve => window.setTimeout(resolve, 350));
     if (!signal.aborted) {
-      analysis = await analyzeCanvasAgainstAppleArtwork(result.canvasUrl!, signal);
+      analysis = await analyzeCanvasAgainstAppleArtwork(result.canvasUrl, signal);
     }
   }
 
-  if (signal.aborted || expectedSequence !== sequence || identity !== activeTrackIdentity) return;
+  if (signal.aborted || seq <= 0 || identity !== activeTrackIdentity) return;
 
   canvasAnalysisPending.value = false;
+  analysisCache.set(identity, analysis.duplicate);
+
+  canvasSuppressedForAppleArtwork.value = analysis.duplicate;
+  canvasTransitioning.value = false;
+  canvasActive.value = !analysis.duplicate;
+
   if (analysis.duplicate) {
-    canvasSuppressedForAppleArtwork.value = true;
-    canvasActive.value = false;
-    log("Canvas suppressed because Apple Music animated artwork visually matches Spotify Canvas", {
+    // Keep the URL available to the renderer for a clean outgoing transition,
+    // then remove it after the transition has completed.
+    canvasUrl.value = result.canvasUrl;
+    fadeOldCanvasTimer = window.setTimeout(() => {
+      if (!canvasActive.value && canvasSuppressedForAppleArtwork.value) {
+        canvasUrl.value = "";
+      }
+      fadeOldCanvasTimer = null;
+    }, 800);
+    log("Canvas suppressed because Apple Music tall animated artwork matches the Canvas", {
       trackIdentity: identity,
       confidence: Number(analysis.confidence.toFixed(3)),
       sourceDetected: true,
@@ -141,7 +183,6 @@ async function analyzeAndActivate(
     return;
   }
 
-  canvasSuppressedForAppleArtwork.value = false;
   canvasUrl.value = result.canvasUrl;
   canvasActive.value = true;
   log("Canvas artwork analysis complete; Canvas enabled", {
@@ -160,20 +201,7 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
 
   const cached = cacheGet(expectedIdentity);
   if (cached) {
-    activeAbortController?.abort();
-    const controller = new AbortController();
-    activeAbortController = controller;
-    loading = true;
-    const seq = ++sequence;
-    activeTrackIdentity = expectedIdentity;
-    try {
-      await applyCachedResult(track, expectedIdentity, cached, controller.signal, seq);
-    } finally {
-      if (activeAbortController === controller) activeAbortController = null;
-      if (seq === sequence && expectedIdentity === activeTrackIdentity) {
-        loading = false;
-      }
-    }
+    applyCachedResult(track, expectedIdentity, cached);
     return;
   }
 
@@ -189,10 +217,11 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
   loading = true;
   const seq = ++sequence;
   activeTrackIdentity = expectedIdentity;
-  canvasUrl.value = "";
   canvasActive.value = false;
+  canvasTransitioning.value = Boolean(canvasUrl.value);
   canvasAnalysisPending.value = false;
   canvasSuppressedForAppleArtwork.value = false;
+  clearFadeOldCanvasTimer();
 
   log("Canvas API resolver starting", {
     sequence: seq,
@@ -220,9 +249,22 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
 
     if (data.canvasUrl) {
       cachePut(expectedIdentity, data);
-      canvasUrl.value = data.canvasUrl;
-      await analyzeAndActivate(track, expectedIdentity, data, controller.signal, seq);
+      await analyzeAndActivate(expectedIdentity, data, controller.signal);
     } else {
+      canvasActive.value = false;
+      canvasAnalysisPending.value = false;
+      canvasSuppressedForAppleArtwork.value = false;
+      if (canvasUrl.value) {
+        canvasTransitioning.value = true;
+        clearFadeOldCanvasTimer();
+        fadeOldCanvasTimer = window.setTimeout(() => {
+          canvasUrl.value = "";
+          canvasTransitioning.value = false;
+          fadeOldCanvasTimer = null;
+        }, 800);
+      } else {
+        canvasTransitioning.value = false;
+      }
       warn("No Canvas URL returned", {
         spotifyTrackId: data.spotifyTrackId,
         reason: data.reason,
@@ -241,6 +283,7 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
     if (seq === sequence && expectedIdentity === activeTrackIdentity) loading = false;
     if (seq === sequence && expectedIdentity === activeTrackIdentity && !canvasUrl.value) {
       canvasAnalysisPending.value = false;
+      canvasTransitioning.value = false;
     }
   }
 }
@@ -307,7 +350,7 @@ onMounted(() => {
   observer = new MutationObserver(() => scheduleSync());
   observer.observe(document.documentElement, { subtree: true, childList: true });
 
-  timer = window.setInterval(scheduleSync, 1500);
+  timer = window.setInterval(scheduleSync, 1200);
   scheduleSync();
 });
 
@@ -318,6 +361,7 @@ onUnmounted(() => {
   observer = null;
   if (timer !== null) window.clearInterval(timer);
   if (scheduledSync !== null) window.cancelAnimationFrame(scheduledSync);
+  clearFadeOldCanvasTimer();
   cleanupEvents.forEach(fn => fn());
 });
 </script>

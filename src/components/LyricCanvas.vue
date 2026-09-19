@@ -1,7 +1,8 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from "vue";
+import { computed, onMounted, onUnmounted, ref, watch } from "vue";
 import { canvasActive, canvasUrl } from "../state";
 import { useConfig } from "../config";
+import { subscribeEvent } from "../cider";
 
 withDefaults(defineProps<{ mode?: "main" }>(), { mode: "main" });
 const cfg = useConfig();
@@ -48,15 +49,6 @@ const NAVIGATION_SELECTORS = [
   '.q-drawer--left',
 ];
 
-const MINI_SELECTORS = [
-  '[sfc-name="MiniPlayer"]',
-  '[data-testid*="mini-player"]',
-  '.mini-player',
-  '.miniplayer',
-  '[class*="mini-player"]',
-  '[class*="miniplayer"]',
-];
-
 let rootEl: HTMLElement | null = null;
 let portalLayer: HTMLElement | null = null;
 let videoEl: HTMLVideoElement | null = null;
@@ -80,8 +72,19 @@ let stalledChecks = 0;
 let recoveryCooldownUntil = 0;
 let syncRunning = false;
 let pendingSync = false;
+let immersiveHost: HTMLElement | null = null;
+let animationTimer: number | null = null;
+let immersiveEventCleanup: Array<() => void> = [];
+const previousCanvasUrl = ref("");
+const animationState = ref<"idle" | "enter" | "switch" | "immersive-enter" | "immersive-exit">("idle");
 
 const reducedMotion = computed(() => Boolean(reducedMotionQuery?.matches));
+const animationClasses = computed(() => ({
+  "canvas-entering": animationState.value === "enter",
+  "canvas-switching": animationState.value === "switch",
+  "canvas-immersive-entering": animationState.value === "immersive-enter",
+  "canvas-immersive-exiting": animationState.value === "immersive-exit",
+}));
 const canvasOpacity = computed(() => 1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100);
 
 function log(...args: unknown[]) {
@@ -242,75 +245,21 @@ function syncNavigationContrast(host: HTMLElement | null) {
   }
 }
 
-function isLikelyMiniPlayerRect(rect: DOMRect) {
-  const viewportW = Math.max(window.innerWidth, 1);
-  const viewportH = Math.max(window.innerHeight, 1);
-  const bottomGap = Math.max(0, viewportH - rect.bottom);
-  const maxHeight = Math.min(220, viewportH * 0.34);
+function findImmersiveHost(): HTMLElement | null {
+  // Cider's "One" immersive layout uses the artwork column as the stable host.
+  const fullscreen = document.querySelector<HTMLElement>(".fullscreen-view");
+  if (!fullscreen || !isDisplayed(fullscreen)) return null;
 
-  // A real Mini Player is bottom-docked and compact. Reject large ancestors or
-  // page-level containers so the Canvas cannot accidentally cover the whole UI.
-  return (
-    rect.width >= Math.min(280, viewportW * 0.35) &&
-    rect.height >= 50 &&
-    rect.height <= maxHeight &&
-    rect.top >= viewportH * 0.60 &&
-    bottomGap <= Math.max(36, viewportH * 0.06) &&
-    rect.left < viewportW &&
-    rect.right > 0
-  );
+  const host = fullscreen.querySelector<HTMLElement>(".artwork-col");
+  const artwork = host?.querySelector<HTMLElement>(".artwork");
+  if (!host || !artwork || !isDisplayed(host) || !isDisplayed(artwork)) return null;
+
+  return host;
 }
 
-function findMiniPlayerHost(): HTMLElement | null {
-  const candidates = new Set<HTMLElement>();
-
-  // First consider explicit Mini Player surfaces. These receive the strongest
-  // preference and are much safer than matching arbitrary ancestors.
-  for (const selector of MINI_SELECTORS) {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) candidates.add(el);
-  }
-
-  // Then consider elements whose own metadata identifies them as a mini player.
-  // Do not walk up arbitrary ancestors: large page wrappers are a common false
-  // positive and were the source of the oversized Canvas shown in screenshot 3.
-  for (const el of document.querySelectorAll<HTMLElement>(
-    '[class*="mini" i], [aria-label*="mini" i], [sfc-name*="mini" i], [data-testid*="mini" i]'
-  )) {
-    candidates.add(el);
-  }
-
-  let best: HTMLElement | null = null;
-  let bestScore = -Infinity;
-
-  for (const el of candidates) {
-    if (!isDisplayed(el) || !isMiniContext(el)) continue;
-    const r = el.getBoundingClientRect();
-    if (!isLikelyMiniPlayerRect(r)) continue;
-
-    const viewportW = Math.max(window.innerWidth, 1);
-    const viewportH = Math.max(window.innerHeight, 1);
-    const bottomGap = Math.max(0, viewportH - r.bottom);
-    const explicit = MINI_SELECTORS.some((selector) => el.matches(selector)) ? 10000 : 0;
-
-    // Prefer the explicit Mini Player surface, then the largest useful width,
-    // while still heavily penalizing distance from the viewport bottom.
-    const score =
-      explicit +
-      (r.width / viewportW) * 500 +
-      (r.height / viewportH) * 120 -
-      (bottomGap / viewportH) * 1200;
-
-    if (score > bestScore) {
-      bestScore = score;
-      best = el;
-    }
-  }
-
-  return best;
-}
 function findPlacementHost(): HTMLElement | null {
   if (cfg.placement === "navigation") return findNavigationHost();
-  if (cfg.placement === "mini") return findMiniPlayerHost();
+  if (cfg.placement === "immersive") return findImmersiveHost();
   return findRightLyricsHost();
 }
 
@@ -352,31 +301,48 @@ function scheduleSync(reason: string) {
   });
 }
 
-function ensurePortalRoot() {
+function syncImmersiveHost(host: HTMLElement | null) {
+  if (immersiveHost && immersiveHost !== host) {
+    immersiveHost.classList.remove("canvascider-immersive-host");
+  }
+  immersiveHost = host;
+  if (immersiveHost) immersiveHost.classList.add("canvascider-immersive-host");
+}
+
+function clearImmersiveHost() {
+  if (!immersiveHost) return;
+  immersiveHost.classList.remove("canvascider-immersive-host");
+  immersiveHost = null;
+}
+
+function ensurePortalRoot(host: HTMLElement | null) {
   if (!rootEl) {
     rootEl = document.querySelector<HTMLElement>("canvascider-main-canvas");
   }
   if (!rootEl) return false;
 
-  // Critical: never move this element into a Cider-managed Lyrics node.
-  // It permanently remains plugin-owned under <body>.
-  if (rootEl.parentElement !== document.body) {
-    document.body.appendChild(rootEl);
+  const useImmersiveLayer = cfg.placement === "immersive" && Boolean(host);
+  if (useImmersiveLayer && host) {
+    if (rootEl.parentElement !== host) host.insertBefore(rootEl, host.firstChild);
+    syncImmersiveHost(host);
+  } else {
+    if (rootEl.parentElement !== document.body) document.body.appendChild(rootEl);
+    clearImmersiveHost();
   }
 
-  rootEl.style.setProperty("position", "fixed", "important");
+  rootEl.style.setProperty("position", useImmersiveLayer ? "absolute" : "fixed", "important");
   rootEl.style.setProperty("margin", "0", "important");
   rootEl.style.setProperty("padding", "0", "important");
   rootEl.style.setProperty("pointer-events", "none", "important");
-  rootEl.style.setProperty("overflow", "hidden", "important");
+  rootEl.style.setProperty("overflow", "visible", "important");
   rootEl.style.setProperty("display", "none", "important");
   rootEl.style.setProperty("width", "0", "important");
   rootEl.style.setProperty("height", "0", "important");
   rootEl.style.setProperty("inset", "auto", "important");
-  rootEl.dataset.canvasPortalOwner = "canvas-for-cider";
+  rootEl.dataset.canvasPortalOwner = useImmersiveLayer ? "canvas-for-cider-immersive-one" : "canvas-for-cider";
 
   portalLayer = rootEl.querySelector<HTMLElement>(".layer");
-  videoEl = rootEl.querySelector<HTMLVideoElement>("video");
+  videoEl = rootEl.querySelector<HTMLVideoElement>(".video-current");
   return Boolean(portalLayer && videoEl);
 }
 
@@ -449,26 +415,42 @@ function setVideoSource(url: string, forceReload = false) {
   try { videoEl.load(); } catch {}
 }
 
+function getImmersiveArtwork(host: HTMLElement) {
+  return host.querySelector<HTMLElement>(".artwork");
+}
+
 function setPortalRectangle(host: HTMLElement) {
   if (!rootEl || !portalLayer) return false;
 
   syncNavigationContrast(host);
-  const r = host.getBoundingClientRect();
+  const immersive = cfg.placement === "immersive";
+  const target = immersive ? getImmersiveArtwork(host) : host;
+  if (!target) return false;
+
+  const r = target.getBoundingClientRect();
   const visible = r.width > 120 && r.height > 100 && r.bottom > 0 && r.right > 0 &&
     r.left < window.innerWidth && r.top < window.innerHeight;
-
   if (!visible) {
     rootEl.style.setProperty("display", "none", "important");
     return false;
   }
 
-  // Body-owned portal: exact on-screen rectangle of the concrete right-side
-  // Lyrics surface selected by findRightLyricsHost(). No viewport-wide sizing.
-  rootEl.style.setProperty("left", `${Math.round(r.left * 100) / 100}px`, "important");
-  rootEl.style.setProperty("top", `${Math.round(r.top * 100) / 100}px`, "important");
-  rootEl.style.setProperty("width", `${Math.round(r.width * 100) / 100}px`, "important");
-  rootEl.style.setProperty("height", `${Math.round(r.height * 100) / 100}px`, "important");
-  rootEl.style.setProperty("z-index", getPortalZIndex(host), "important");
+  if (immersive) {
+    const hostRect = host.getBoundingClientRect();
+    const bleed = Math.max(18, Math.min(r.width, r.height) * 0.10);
+    rootEl.style.setProperty("left", `${Math.round((r.left - hostRect.left - bleed) * 100) / 100}px`, "important");
+    rootEl.style.setProperty("top", `${Math.round((r.top - hostRect.top - bleed) * 100) / 100}px`, "important");
+    rootEl.style.setProperty("width", `${Math.round((r.width + bleed * 2) * 100) / 100}px`, "important");
+    rootEl.style.setProperty("height", `${Math.round((r.height + bleed * 2) * 100) / 100}px`, "important");
+    rootEl.style.setProperty("z-index", "1", "important");
+  } else {
+    rootEl.style.setProperty("left", `${Math.round(r.left * 100) / 100}px`, "important");
+    rootEl.style.setProperty("top", `${Math.round(r.top * 100) / 100}px`, "important");
+    rootEl.style.setProperty("width", `${Math.round(r.width * 100) / 100}px`, "important");
+    rootEl.style.setProperty("height", `${Math.round(r.height * 100) / 100}px`, "important");
+    rootEl.style.setProperty("z-index", getPortalZIndex(host), "important");
+  }
+
   rootEl.style.setProperty("display", "block", "important");
   portalLayer.style.setProperty("position", "absolute", "important");
   portalLayer.style.setProperty("inset", "0", "important");
@@ -490,36 +472,39 @@ function setPortalRectangle(host: HTMLElement) {
   if (signature !== lastRectSignature || lastTargetHost !== host) {
     lastRectSignature = signature;
     lastTargetHost = host;
-    log("Canvas portal latched to current main-window Lyrics pane", {
+    log("Canvas portal latched", {
       host: describe(host),
+      placement: cfg.placement,
       left: Math.round(r.left),
       top: Math.round(r.top),
       width: Math.round(r.width),
       height: Math.round(r.height),
-      portalOwner: "document.body",
+      portalOwner: immersive ? "immersive-one-artwork-host" : "document.body",
     });
   }
-
   return true;
 }
 
 async function syncToLyricsTarget(reason: string) {
-  if (syncRunning || !ensurePortalRoot() || !canvasActive.value || !canvasUrl.value || reducedMotion.value) return;
+  if (syncRunning || !canvasActive.value || !canvasUrl.value || reducedMotion.value) return;
   syncRunning = true;
   try {
     const url = canvasUrl.value;
+    const host = findPlacementHost();
+    if (!host || !ensurePortalRoot(host)) return;
+
     configureVideo(videoEl!);
     attachPlaybackGuard(videoEl!);
     setVideoSource(url);
 
-    const host = findPlacementHost();
-    if (!host || !setPortalRectangle(host)) {
+    if (!setPortalRectangle(host)) {
       rootEl!.style.setProperty("display", "none", "important");
       const now = Date.now();
       if (now - lastNoTargetLogAt > 2500) {
         lastNoTargetLogAt = now;
-        log("Lyrics pane not currently available; portal stays alive and continues retrying", {
+        log("Canvas target not currently available; portal stays alive and continues retrying", {
           reason,
+          placement: cfg.placement,
           attempts: latchAttempts,
         });
       }
@@ -576,7 +561,10 @@ function startPersistentLatch(url: string, reason: string) {
 function stopPortal() {
   clearLatch();
   lastTargetHost = null;
+  clearImmersiveHost();
   if (rootEl) rootEl.style.setProperty("display", "none", "important");
+  previousCanvasUrl.value = "";
+  animationState.value = "idle";
 }
 
 function handleMotionChange() {
@@ -584,24 +572,50 @@ function handleMotionChange() {
   else if (canvasUrl.value && canvasActive.value) startPersistentLatch(canvasUrl.value, "reduced-motion disabled");
 }
 
+function triggerAnimation(kind: "enter" | "switch" | "immersive-enter" | "immersive-exit") {
+  if (reducedMotion.value) return;
+  animationState.value = kind;
+  if (animationTimer !== null) window.clearTimeout(animationTimer);
+  animationTimer = window.setTimeout(() => {
+    animationState.value = "idle";
+    if (kind !== "switch") previousCanvasUrl.value = "";
+  }, kind === "switch" ? 900 : 820);
+}
+
 watch(
   [canvasUrl, canvasActive, () => cfg.placement],
-  ([url, active], [oldUrl, oldActive]) => {
+  ([url, active, placement], [oldUrl, oldActive, oldPlacement]) => {
     if (!active || !url) {
       lastAppliedUrl = "";
+      if (oldPlacement === "immersive" && placement !== "immersive" && oldActive) {
+        triggerAnimation("immersive-exit");
+      }
       stopPortal();
       return;
     }
 
-    if (url !== oldUrl || active !== oldActive) {
+    if (url !== oldUrl || active !== oldActive || placement !== oldPlacement) {
+      if (url && oldUrl && url !== oldUrl) {
+        previousCanvasUrl.value = oldUrl;
+        triggerAnimation("switch");
+      } else if (placement === "immersive" && oldPlacement !== "immersive") {
+        triggerAnimation("immersive-enter");
+      } else if (!oldActive && active) {
+        triggerAnimation("enter");
+      }
+
       latchUrl = url;
       latchStartedAt = Date.now();
       latchAttempts = 0;
-      configureVideo(videoEl || rootEl?.querySelector<HTMLVideoElement>("video")!);
-      setVideoSource(url, true);
-      log("Canvas URL found; starting immediate persistent Lyrics portal latch", {
+      const currentVideo = videoEl || rootEl?.querySelector<HTMLVideoElement>(".video-current");
+      if (currentVideo) {
+        configureVideo(currentVideo);
+        setVideoSource(url, true);
+      }
+      log("Canvas URL found; starting immediate persistent Canvas portal latch", {
         urlChanged: url !== oldUrl,
         activeChanged: active !== oldActive,
+        placement,
       });
     }
 
@@ -612,9 +626,28 @@ watch(
 
 onMounted(() => {
   reducedMotionQuery = window.matchMedia("(prefers-reduced-motion: reduce)");
+
+  immersiveEventCleanup = [
+    subscribeEvent("immersive:opened", () => {
+      if (cfg.placement === "immersive" && canvasActive.value && canvasUrl.value) {
+        triggerAnimation("immersive-enter");
+      }
+      scheduleSync("Cider Immersive opened");
+    }),
+    subscribeEvent("immersive:closed", () => {
+      if (cfg.placement === "immersive" && canvasActive.value && canvasUrl.value) {
+        triggerAnimation("immersive-exit");
+        window.setTimeout(() => {
+          if (!findImmersiveHost()) stopPortal();
+        }, 420);
+      } else {
+        scheduleSync("Cider Immersive closed");
+      }
+    }),
+  ];
   reducedMotionQuery.addEventListener?.("change", handleMotionChange);
 
-  ensurePortalRoot();
+  ensurePortalRoot(null);
   if (videoEl) {
     configureVideo(videoEl);
     attachPlaybackGuard(videoEl);
@@ -675,6 +708,10 @@ onUnmounted(() => {
   clearPlaybackGuard();
   if (playbackWatchdog !== null) window.clearInterval(playbackWatchdog);
   reducedMotionQuery?.removeEventListener?.("change", handleMotionChange);
+  if (animationTimer !== null) window.clearTimeout(animationTimer);
+  immersiveEventCleanup.forEach(fn => fn());
+  immersiveEventCleanup = [];
+  clearImmersiveHost();
   document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast").forEach((el) => {
     el.classList.remove("canvascider-navigation-contrast");
   });
@@ -685,9 +722,44 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="layer" aria-hidden="true" :style="{ opacity: canvasOpacity }">
+  <div class="layer" :class="animationClasses" aria-hidden="true" :style="{ opacity: canvasOpacity }">
     <video
-      class="video"
+      v-if="previousCanvasUrl"
+      class="video video-previous"
+      :src="previousCanvasUrl"
+      muted
+      loop
+      playsinline
+      preload="auto"
+      autoplay
+    ></video>
+
+    <div v-if="cfg.placement === 'lyrics'" class="lyrics-ambience" aria-hidden="true">
+      <video
+        class="ambient-video"
+        :src="canvasUrl || undefined"
+        muted
+        loop
+        playsinline
+        preload="auto"
+        :autoplay="!reducedMotion"
+      ></video>
+    </div>
+
+    <div v-if="cfg.placement === 'immersive'" class="immersive-ambience" aria-hidden="true">
+      <video
+        class="ambient-video"
+        :src="canvasUrl || undefined"
+        muted
+        loop
+        playsinline
+        preload="auto"
+        :autoplay="!reducedMotion"
+      ></video>
+    </div>
+
+    <video
+      class="video video-current"
       :src="canvasUrl || undefined"
       muted
       loop
@@ -695,6 +767,7 @@ onUnmounted(() => {
       preload="auto"
       :autoplay="!reducedMotion"
     ></video>
+
     <div class="edge-fade edge-fade-top"></div>
     <div class="edge-fade edge-fade-bottom"></div>
   </div>
@@ -706,11 +779,15 @@ onUnmounted(() => {
   color:#fff!important;
 }
 
+.canvascider-immersive-host{
+  position:relative!important;
+}
+
 canvascider-main-canvas{
   box-sizing:border-box!important;
   position:fixed!important;
   pointer-events:none!important;
-  overflow:hidden!important;
+  overflow:visible!important;
   margin:0!important;
   padding:0!important;
   min-width:0!important;
@@ -734,6 +811,12 @@ canvascider-main-canvas{
   opacity:1;
   transition:opacity 120ms ease;
 }
+.layer.canvas-entering,
+.layer.canvas-switching,
+.layer.canvas-immersive-entering,
+.layer.canvas-immersive-exiting{
+  will-change:clip-path,transform,opacity,filter;
+}
 .video{
   position:absolute;
   inset:0;
@@ -754,24 +837,87 @@ canvascider-main-canvas{
   mask-size:100% 100%;
   mix-blend-mode:screen;
 }
-.edge-fade{
+.video-previous{opacity:1;}
+.video-current{z-index:2;}
+.layer.canvas-switching .video-current{animation:canvasSwitchCurrent 900ms cubic-bezier(.22,.61,.36,1) both;}
+.layer.canvas-switching .video-previous{animation:canvasSwitchPrevious 900ms cubic-bezier(.22,.61,.36,1) both;}
+.layer.canvas-entering,
+.layer.canvas-immersive-entering{
+  clip-path:polygon(50% 46%,54% 49%,58% 50%,54% 51%,50% 54%,46% 51%,42% 50%,46% 49%);
+  animation:canvasStarReveal 820ms cubic-bezier(.16,1,.3,1) forwards;
+}
+.layer.canvas-immersive-entering .video-current{
+  animation:canvasImmersiveSpin 820ms cubic-bezier(.12,.72,.22,1) both;
+}
+.layer.canvas-immersive-exiting{
+  animation:canvasStarReverse 650ms cubic-bezier(.65,0,.84,.15) both;
+}
+.lyrics-ambience,
+.immersive-ambience{
   position:absolute;
-  left:0;
-  width:100%;
-  height:18%;
   pointer-events:none;
-  z-index:1;
+  z-index:0;
+  overflow:hidden;
 }
-.edge-fade-top{
-  top:0;
-  background:linear-gradient(to bottom,rgba(0,0,0,.48) 0%,rgba(0,0,0,.20) 35%,rgba(0,0,0,0) 100%);
-  mix-blend-mode:multiply;
+.lyrics-ambience{
+  left:-18%;
+  top:-8%;
+  width:60%;
+  height:116%;
+  opacity:.28;
+  filter:blur(32px) saturate(1.18) contrast(1.04);
+  transform:scale(1.08);
+  transform-origin:center right;
+  mask-image:linear-gradient(to right,transparent 0%,#000 28%,#000 78%,transparent 100%);
+  -webkit-mask-image:linear-gradient(to right,transparent 0%,#000 28%,#000 78%,transparent 100%);
 }
-.edge-fade-bottom{
-  bottom:0;
-  background:linear-gradient(to top,rgba(0,0,0,.48) 0%,rgba(0,0,0,.20) 35%,rgba(0,0,0,0) 100%);
-  mix-blend-mode:multiply;
+.immersive-ambience{
+  inset:-18%;
+  opacity:.34;
+  filter:blur(34px) saturate(1.2) contrast(1.03);
+  transform:scale(1.08);
+  mask-image:radial-gradient(ellipse at center,#000 42%,rgba(0,0,0,.72) 58%,transparent 88%);
+  -webkit-mask-image:radial-gradient(ellipse at center,#000 42%,rgba(0,0,0,.72) 58%,transparent 88%);
 }
+.ambient-video{
+  position:absolute;
+  inset:0;
+  width:100%;
+  height:100%;
+  object-fit:cover;
+  opacity:1;
+  mix-blend-mode:screen;
+}
+@keyframes canvasStarReveal{
+  from{clip-path:polygon(50% 46%,54% 49%,58% 50%,54% 51%,50% 54%,46% 51%,42% 50%,46% 49%);}
+  to{clip-path:polygon(0% 0%,100% 0%,100% 50%,100% 100%,0% 100%,0% 50%,0% 50%,0% 0%);}
+}
+@keyframes canvasStarReverse{
+  from{
+    clip-path:polygon(0% 0%,100% 0%,100% 50%,100% 100%,0% 100%,0% 50%,0% 50%,0% 0%);
+    transform:scale(1) rotate(0deg);
+  }
+  to{
+    clip-path:polygon(50% 46%,54% 49%,58% 50%,54% 51%,50% 54%,46% 51%,42% 50%,46% 49%);
+    transform:scale(.86) rotate(360deg);
+  }
+}
+@keyframes canvasImmersiveSpin{
+  0%{transform:scale(.84) rotate(-360deg);filter:saturate(.75) contrast(1) brightness(.72);}
+  64%{transform:scale(1.015) rotate(12deg);filter:saturate(.88) contrast(1.02) brightness(.78);}
+  100%{transform:scale(1) rotate(0deg);filter:saturate(.88) contrast(1.02) brightness(.78);}
+}
+@keyframes canvasSwitchCurrent{
+  0%{opacity:0;transform:scale(1.035);filter:blur(10px) saturate(.72) brightness(.72);}
+  55%{opacity:1;transform:scale(1.005);filter:blur(1.5px) saturate(.88) brightness(.78);}
+  100%{opacity:1;transform:scale(1);filter:blur(0) saturate(.88) contrast(1.02) brightness(.78);}
+}
+@keyframes canvasSwitchPrevious{
+  0%{opacity:1;transform:scale(1);filter:blur(0);}
+  45%{opacity:.72;transform:scale(.99);filter:blur(1px);}
+  100%{opacity:0;transform:scale(.975);filter:blur(8px);}
+}
+
 @media (prefers-reduced-motion: reduce){
   .video{visibility:hidden!important;}
 }

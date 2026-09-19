@@ -1,7 +1,7 @@
 import { type Ref } from "vue";
 import { saveConfig } from "./cider";
 
-export type CanvasPlacement = "lyrics" | "navigation" | "mini";
+export type CanvasPlacement = "lyrics" | "navigation" | "immersive";
 
 export interface PluginConfig {
   placement: CanvasPlacement;

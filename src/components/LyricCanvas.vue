@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onMounted, onUnmounted, ref, watch } from "vue";
-import { canvasActive, canvasUrl } from "../state";
+import { canvasActive, canvasTransitioning, canvasUrl } from "../state";
 import { useConfig } from "../config";
+import { subscribeEvent } from "../cider";
 import { subscribeEvent } from "../cider";
 
 withDefaults(defineProps<{ mode?: "main" }>(), { mode: "main" });
@@ -72,6 +73,13 @@ let stalledChecks = 0;
 let recoveryCooldownUntil = 0;
 let syncRunning = false;
 let pendingSync = false;
+let currentVideoEl: HTMLVideoElement | null = null;
+let incomingVideoEl: HTMLVideoElement | null = null;
+let animationTimer: number | null = null;
+let immersiveOpenByEvent = false;
+let activeImmersiveTarget = false;
+let lastRenderedUrl = "";
+let lastRenderedPlacement = cfg.placement;
 let immersiveHost: HTMLElement | null = null;
 let animationTimer: number | null = null;
 let immersiveEventCleanup: Array<() => void> = [];
@@ -86,6 +94,230 @@ const animationClasses = computed(() => ({
   "canvas-immersive-exiting": animationState.value === "immersive-exit",
 }));
 const canvasOpacity = computed(() => 1 - Math.max(0, Math.min(100, Number(cfg.transparency ?? 50))) / 100);
+
+
+const currentRenderUrl = ref("");
+const incomingRenderUrl = ref("");
+const phase = ref<"idle" | "entering" | "switching" | "immersive-enter" | "immersive-exit" | "leaving">("idle");
+const reducedMotionQuery = ref<MediaQueryList | null>(null);
+
+const renderable = computed(() =>
+  Boolean((canvasActive.value || canvasTransitioning.value) &&
+    (currentRenderUrl.value || incomingRenderUrl.value))
+);
+
+function clearAnimationTimer() {
+  if (animationTimer !== null) window.clearTimeout(animationTimer);
+  animationTimer = null;
+}
+
+function setPhase(next: typeof phase.value, duration: number) {
+  clearAnimationTimer();
+  phase.value = next;
+  if (next === "idle") return;
+  animationTimer = window.setTimeout(() => {
+    animationTimer = null;
+    phase.value = "idle";
+  }, duration);
+}
+
+async function safePlay(video: HTMLVideoElement | null) {
+  if (!video || reducedMotion.value) return;
+  try {
+    video.muted = true;
+    video.defaultMuted = true;
+    video.loop = true;
+    video.playsInline = true;
+    await video.play();
+  } catch {}
+}
+
+function syncVideoRefs() {
+  if (!rootEl) return;
+  currentVideoEl = rootEl.querySelector<HTMLVideoElement>(".current-video");
+  incomingVideoEl = rootEl.querySelector<HTMLVideoElement>(".incoming-video");
+}
+
+function startInitialAnimation() {
+  return nextTick().then(() => {
+    syncVideoRefs();
+    void safePlay(currentVideoEl);
+    if (cfg.placement === "immersive") setPhase("immersive-enter", 900);
+    else setPhase("entering", 760);
+  });
+}
+
+function setRenderSource(url: string) {
+  if (!url) return;
+  if (!currentRenderUrl.value) {
+    currentRenderUrl.value = url;
+    incomingRenderUrl.value = "";
+    lastRenderedUrl = url;
+    void startInitialAnimation();
+    return;
+  }
+  if (currentRenderUrl.value === url && !incomingRenderUrl.value) return;
+
+  incomingRenderUrl.value = url;
+  void nextTick().then(() => {
+    syncVideoRefs();
+    void safePlay(currentVideoEl);
+    void safePlay(incomingVideoEl);
+    setPhase("switching", 760);
+    clearAnimationTimer();
+    animationTimer = window.setTimeout(() => {
+      currentRenderUrl.value = incomingRenderUrl.value;
+      incomingRenderUrl.value = "";
+      lastRenderedUrl = currentRenderUrl.value;
+      animationTimer = null;
+      phase.value = "idle";
+      void nextTick().then(() => {
+        syncVideoRefs();
+        void safePlay(currentVideoEl);
+      });
+    }, 760);
+  });
+}
+
+function clearRenderedCanvas() {
+  clearAnimationTimer();
+  currentRenderUrl.value = "";
+  incomingRenderUrl.value = "";
+  lastRenderedUrl = "";
+  phase.value = "idle";
+}
+
+function startLeavingAnimation() {
+  if (!currentRenderUrl.value) return;
+  setPhase(cfg.placement === "immersive" ? "immersive-exit" : "leaving", 700);
+}
+
+function syncRenderState() {
+  if (canvasUrl.value && canvasActive.value) {
+    if (canvasUrl.value !== lastRenderedUrl || currentRenderUrl.value !== canvasUrl.value) {
+      setRenderSource(canvasUrl.value);
+    }
+  } else if (canvasUrl.value && canvasTransitioning.value) {
+    startLeavingAnimation();
+  }
+}
+
+function normalizeImmersiveMode(value: unknown) {
+  return String(value ?? "").trim().toLowerCase().replace(/[\s_-]+/g, "");
+}
+
+function readImmersiveStyleFromConfig(): boolean | null {
+  const cider = (globalThis as any).CiderApp;
+  const values = [
+    cider?.config?.visual?.immersiveStyle,
+    cider?.config?.visual?.immersive_style,
+    cider?.config?.visual?.immersive?.style,
+    cider?.config?.visual?.immersive?.layout,
+    cider?.config?.immersiveStyle,
+    cider?.config?.immersive_style,
+    cider?.config?.immersive?.style,
+    cider?.config?.immersive?.layout,
+  ];
+  for (const value of values) {
+    if (typeof value !== "string" || !value.trim()) continue;
+    return normalizeImmersiveMode(value) === "one";
+  }
+  return null;
+}
+
+function immersiveStyleIsOne(host: HTMLElement | null) {
+  if (!host) return false;
+  const configured = readImmersiveStyleFromConfig();
+  if (configured !== null) return configured;
+
+  const selectors = [
+    "[data-immersive-style]",
+    "[data-style]",
+    "[data-layout]",
+    "[data-layout-name]",
+    "[aria-label]",
+    "[title]",
+  ];
+  let foundOne = false;
+  for (const selector of selectors) {
+    for (const el of host.querySelectorAll<HTMLElement>(selector)) {
+      const values = [
+        el.getAttribute("data-immersive-style"),
+        el.getAttribute("data-style"),
+        el.getAttribute("data-layout"),
+        el.getAttribute("data-layout-name"),
+        el.getAttribute("aria-label"),
+        el.getAttribute("title"),
+      ].filter(Boolean);
+      for (const value of values) {
+        const mode = normalizeImmersiveMode(value);
+        if (mode === "one" || /immersiveone/.test(mode)) foundOne = true;
+      }
+    }
+  }
+
+  const own = [
+    host.id,
+    typeof host.className === "string" ? host.className : "",
+    host.getAttribute("data-immersive-style"),
+    host.getAttribute("data-style"),
+    host.getAttribute("data-layout"),
+  ].filter(Boolean).join(" ").split(/[\s_-]+/).map(normalizeImmersiveMode);
+
+  return foundOne || own.includes("one") || own.includes("immersiveone");
+}
+
+function findImmersiveHost(): HTMLElement | null {
+  const selectors = [
+    '[data-immersive="true"]',
+    '[data-mode="immersive"]',
+    '[data-view="immersive"]',
+    '[sfc-name*="immersive" i]',
+    '[data-testid*="immersive" i]',
+    '[class*="immersive" i]',
+    '[id*="immersive" i]',
+    ".fullscreen-view-container",
+  ];
+  const candidates = new Set<HTMLElement>();
+  for (const selector of selectors) {
+    for (const el of document.querySelectorAll<HTMLElement>(selector)) candidates.add(el);
+  }
+
+  let best: HTMLElement | null = null;
+  let bestScore = -Infinity;
+  const vw = Math.max(window.innerWidth, 1);
+  const vh = Math.max(window.innerHeight, 1);
+
+  for (const el of candidates) {
+    if (!isDisplayed(el) || el.closest("canvascider-main-canvas")) continue;
+    const r = el.getBoundingClientRect();
+    if (r.width < vw * 0.60 || r.height < vh * 0.60) continue;
+    const areaRatio = (Math.max(0, r.width) * Math.max(0, r.height)) / (vw * vh);
+    const name = [
+      el.id,
+      typeof el.className === "string" ? el.className : "",
+      el.getAttribute("sfc-name"),
+      el.getAttribute("data-testid"),
+      el.getAttribute("data-mode"),
+      el.getAttribute("data-view"),
+    ].filter(Boolean).join(" ").toLowerCase();
+    const exact = /(^|[\s_-])immersive($|[\s_-])/.test(name) ? 5000 : 0;
+    const full = Math.abs(r.width - vw) < vw * .08 && Math.abs(r.height - vh) < vh * .08 ? 2200 : 0;
+    const score = areaRatio * 1000 + exact + full;
+    if (score > bestScore) {
+      best = el;
+      bestScore = score;
+    }
+  }
+  return best;
+}
+
+function immersiveIsOpen(host: HTMLElement | null) {
+  if (immersiveOpenByEvent || document.fullscreenElement) return true;
+  if (!host) return false;
+  const r = host.getBoundingClientRect();
+  return r.width >= window.innerWidth * .72 && r.height >= window.innerHeight * .72;
+}
 
 function log(...args: unknown[]) {
   console.log(PREFIX, ...args);
@@ -302,16 +534,9 @@ function scheduleSync(reason: string) {
 }
 
 function ensurePortalRoot() {
-  if (!rootEl) {
-    rootEl = document.querySelector<HTMLElement>("canvascider-main-canvas");
-  }
+  if (!rootEl) rootEl = document.querySelector<HTMLElement>("canvascider-main-canvas");
   if (!rootEl) return false;
-
-  // Keep the plugin element under <body> so Cider can rebuild Immersive without
-  // taking the plugin's root element with the old fullscreen DOM.
-  if (rootEl.parentElement !== document.body) {
-    document.body.appendChild(rootEl);
-  }
+  if (rootEl.parentElement !== document.body) document.body.appendChild(rootEl);
 
   rootEl.style.setProperty("position", "fixed", "important");
   rootEl.style.setProperty("margin", "0", "important");
@@ -319,14 +544,12 @@ function ensurePortalRoot() {
   rootEl.style.setProperty("pointer-events", "none", "important");
   rootEl.style.setProperty("overflow", "visible", "important");
   rootEl.style.setProperty("display", "none", "important");
-  rootEl.style.setProperty("width", "0", "important");
-  rootEl.style.setProperty("height", "0", "important");
-  rootEl.style.setProperty("inset", "auto", "important");
+  rootEl.style.setProperty("box-sizing", "border-box", "important");
+  rootEl.style.setProperty("min-width", "0", "important");
+  rootEl.style.setProperty("min-height", "0", "important");
   rootEl.dataset.canvasPortalOwner = "canvas-for-cider";
-
-  portalLayer = rootEl.querySelector<HTMLElement>(".layer");
-  videoEl = rootEl.querySelector<HTMLVideoElement>(".video-current");
-  return Boolean(portalLayer && videoEl);
+  syncVideoRefs();
+  return true;
 }
 
 function clearPlaybackGuard() {
@@ -402,48 +625,34 @@ function getImmersiveArtwork(host: HTMLElement) {
   return host.querySelector<HTMLElement>(".artwork");
 }
 
-function setPortalRectangle(host: HTMLElement) {
-  if (!rootEl || !portalLayer) return false;
+function setPortalRectangle(host: HTMLElement, immersive: boolean) {
+  if (!rootEl) return false;
 
-  syncNavigationContrast(host);
-  const immersive = cfg.placement === "immersive";
-  const target = immersive ? getImmersiveArtwork(host) : host;
-  if (!target) return false;
-
-  const r = target.getBoundingClientRect();
-  const visible = r.width > 120 && r.height > 100 && r.bottom > 0 && r.right > 0 &&
+  const r = host.getBoundingClientRect();
+  const visible = r.width > 120 && r.height > 100 &&
+    r.bottom > 0 && r.right > 0 &&
     r.left < window.innerWidth && r.top < window.innerHeight;
+
   if (!visible) {
     rootEl.style.setProperty("display", "none", "important");
     return false;
   }
 
-  if (immersive) {
-    // Give the immersive artwork a soft halo so the Canvas does not have a hard
-    // rectangular edge against Cider's fullscreen background.
-    const bleed = Math.max(18, Math.min(r.width, r.height) * 0.10);
-    rootEl.style.setProperty("left", `${Math.round((r.left - bleed) * 100) / 100}px`, "important");
-    rootEl.style.setProperty("top", `${Math.round((r.top - bleed) * 100) / 100}px`, "important");
-    rootEl.style.setProperty("width", `${Math.round((r.width + bleed * 2) * 100) / 100}px`, "important");
-    rootEl.style.setProperty("height", `${Math.round((r.height + bleed * 2) * 100) / 100}px`, "important");
-    rootEl.style.setProperty("z-index", "1", "important");
-  } else {
-    rootEl.style.setProperty("left", `${Math.round(r.left * 100) / 100}px`, "important");
-    rootEl.style.setProperty("top", `${Math.round(r.top * 100) / 100}px`, "important");
-    rootEl.style.setProperty("width", `${Math.round(r.width * 100) / 100}px`, "important");
-    rootEl.style.setProperty("height", `${Math.round(r.height * 100) / 100}px`, "important");
-    rootEl.style.setProperty("z-index", getPortalZIndex(host), "important");
+  rootEl.style.setProperty("left", Math.round(r.left * 100) / 100 + "px", "important");
+  rootEl.style.setProperty("top", Math.round(r.top * 100) / 100 + "px", "important");
+  rootEl.style.setProperty("width", Math.round(r.width * 100) / 100 + "px", "important");
+  rootEl.style.setProperty("height", Math.round(r.height * 100) / 100 + "px", "important");
+  rootEl.style.setProperty("z-index", getPortalZIndex(host), "important");
+  rootEl.style.setProperty("display", renderable.value ? "block" : "none", "important");
+  rootEl.dataset.canvasPlacement = immersive ? "immersive" : cfg.placement;
+
+  if (activeImmersiveTarget !== immersive) {
+    if (immersive) setPhase("immersive-enter", 900);
+    else if (cfg.placement === "immersive") setPhase("immersive-exit", 700);
+    activeImmersiveTarget = immersive;
   }
 
-  rootEl.style.setProperty("display", "block", "important");
-  portalLayer.style.setProperty("position", "absolute", "important");
-  portalLayer.style.setProperty("inset", "0", "important");
-  portalLayer.style.setProperty("width", "100%", "important");
-  portalLayer.style.setProperty("height", "100%", "important");
-  portalLayer.style.setProperty("display", "block", "important");
-  portalLayer.style.setProperty("pointer-events", "none", "important");
-  portalLayer.style.setProperty("background", "transparent", "important");
-  portalLayer.style.setProperty("opacity", String(canvasOpacity.value), "important");
+  syncNavigationContrast(host);
 
   const signature = [
     describe(host),
@@ -451,62 +660,76 @@ function setPortalRectangle(host: HTMLElement) {
     Math.round(r.top),
     Math.round(r.width),
     Math.round(r.height),
+    cfg.placement,
+    immersive ? "immersive" : "normal",
   ].join("|");
 
   if (signature !== lastRectSignature || lastTargetHost !== host) {
     lastRectSignature = signature;
     lastTargetHost = host;
-    log("Canvas portal latched", {
+    log("Canvas target synchronized", {
       host: describe(host),
       placement: cfg.placement,
+      immersive,
       left: Math.round(r.left),
       top: Math.round(r.top),
       width: Math.round(r.width),
       height: Math.round(r.height),
-      portalOwner: "document.body",
     });
   }
+
   return true;
 }
 
 async function syncToLyricsTarget(reason: string) {
-  if (syncRunning || !canvasActive.value || !canvasUrl.value || reducedMotion.value) return;
+  if (syncRunning || reducedMotion.value || !ensurePortalRoot()) return;
   syncRunning = true;
+
   try {
-    const url = canvasUrl.value;
-    const host = findPlacementHost();
+    syncVideoRefs();
+    syncRenderState();
+
+    const hostInfo = cfg.placement === "immersive"
+      ? { host: findImmersiveHost(), immersive: true }
+      : cfg.placement === "navigation"
+        ? { host: findNavigationHost(), immersive: false }
+        : { host: findRightLyricsHost(), immersive: false };
+
+    let host = hostInfo.host;
+    let immersive = hostInfo.immersive;
+
+    if (cfg.placement === "immersive") {
+      immersive = Boolean(
+        host &&
+        immersiveIsOpen(host) &&
+        immersiveStyleIsOne(host)
+      );
+      if (!immersive) host = null;
+    }
 
     if (!host) {
-      rootEl?.style.setProperty("display", "none", "important");
-      startPersistentLatch(url, reason);
-      return;
-    }
-
-    if (!ensurePortalRoot()) return;
-    configureVideo(videoEl!);
-    attachPlaybackGuard(videoEl!);
-    setVideoSource(url);
-
-    if (!setPortalRectangle(host)) {
       rootEl!.style.setProperty("display", "none", "important");
-      const now = Date.now();
-      if (now - lastNoTargetLogAt > 2500) {
-        lastNoTargetLogAt = now;
-        log("Canvas target not currently available; portal stays alive and continues retrying", {
-          reason,
-          placement: cfg.placement,
-          attempts: latchAttempts,
-        });
-      }
-      startPersistentLatch(url, reason);
+      if (cfg.placement === "immersive") activeImmersiveTarget = false;
       return;
     }
 
-    try { await videoEl!.play(); } catch {}
-    startPersistentLatch(url, reason);
+    if (cfg.placement !== lastRenderedPlacement) {
+      if (cfg.placement === "immersive") setPhase("immersive-enter", 900);
+      else if (lastRenderedPlacement === "immersive") setPhase("immersive-exit", 700);
+      lastRenderedPlacement = cfg.placement;
+    }
+
+    setPortalRectangle(host, immersive);
+
+    if (canvasUrl.value && canvasActive.value) {
+      await safePlay(currentVideoEl);
+      await safePlay(incomingVideoEl);
+    }
   } finally {
     syncRunning = false;
   }
+
+  if (reason) lastNoTargetLogAt = Date.now();
 }
 
 function clearLatch() {
@@ -710,22 +933,49 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="layer" :class="animationClasses" aria-hidden="true" :style="{ opacity: canvasOpacity }">
-    <video
-      v-if="previousCanvasUrl"
-      class="video video-previous"
-      :src="previousCanvasUrl"
-      muted
-      loop
-      playsinline
-      preload="auto"
-      autoplay
-    ></video>
-
-    <div v-if="cfg.placement === 'lyrics'" class="lyrics-ambience" aria-hidden="true">
+  <div
+    class="canvas-shell"
+    :class="[phase, cfg.placement, { visible: renderable }]"
+    aria-hidden="true"
+  >
+    <div v-if="cfg.placement === 'lyrics'" class="ambient ambient-left">
       <video
         class="ambient-video"
-        :src="canvasUrl || undefined"
+        :src="currentRenderUrl || undefined"
+        muted
+        loop
+        playsinline
+        preload="auto"
+      ></video>
+    </div>
+
+    <div v-if="cfg.placement === 'immersive'" class="ambient ambient-frame">
+      <video
+        class="ambient-video"
+        :src="currentRenderUrl || undefined"
+        muted
+        loop
+        playsinline
+        preload="auto"
+      ></video>
+    </div>
+
+    <div class="stage">
+      <video
+        v-if="currentRenderUrl"
+        class="canvas-video current-video"
+        :src="currentRenderUrl"
+        muted
+        loop
+        playsinline
+        preload="auto"
+        :autoplay="!reducedMotion"
+      ></video>
+
+      <video
+        v-if="incomingRenderUrl"
+        class="canvas-video incoming-video"
+        :src="incomingRenderUrl"
         muted
         loop
         playsinline
@@ -733,47 +983,14 @@ onUnmounted(() => {
         :autoplay="!reducedMotion"
       ></video>
     </div>
-
-    <div v-if="cfg.placement === 'immersive'" class="immersive-ambience" aria-hidden="true">
-      <video
-        class="ambient-video"
-        :src="canvasUrl || undefined"
-        muted
-        loop
-        playsinline
-        preload="auto"
-        :autoplay="!reducedMotion"
-      ></video>
-    </div>
-
-    <video
-      class="video video-current"
-      :src="canvasUrl || undefined"
-      muted
-      loop
-      playsinline
-      preload="auto"
-      :autoplay="!reducedMotion"
-    ></video>
-
-    <div class="edge-fade edge-fade-top"></div>
-    <div class="edge-fade edge-fade-bottom"></div>
   </div>
 </template>
 
 <style>
-.canvascider-navigation-contrast,
-.canvascider-navigation-contrast *{
-  color:#fff!important;
-}
-
-.canvascider-immersive-host{
-  position:relative!important;
-}
-
 canvascider-main-canvas{
   box-sizing:border-box!important;
   position:fixed!important;
+  display:none!important;
   pointer-events:none!important;
   overflow:visible!important;
   margin:0!important;
@@ -783,130 +1000,227 @@ canvascider-main-canvas{
   max-width:none!important;
   max-height:none!important;
   transform:none!important;
-  contain:layout paint style!important;
-  isolation:isolate!important;
   background:transparent!important;
+  isolation:isolate!important;
 }
-.layer{
+
+.canvas-shell{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
+  overflow:visible;
+  pointer-events:none;
+  opacity:0;
+  transition:opacity 180ms ease;
+  isolation:isolate;
+}
+
+.canvas-shell.visible{opacity:1}
+
+.stage{
+  position:absolute;
+  inset:0;
   overflow:hidden;
   pointer-events:none;
-  z-index:0;
+  z-index:2;
   background:transparent;
-  opacity:1;
-  transition:opacity 120ms ease;
 }
-.layer.canvas-entering,
-.layer.canvas-switching,
-.layer.canvas-immersive-entering,
-.layer.canvas-immersive-exiting{
-  will-change:clip-path,transform,opacity,filter;
-}
-.video{
+
+.canvas-video{
   position:absolute;
   inset:0;
   width:100%;
   height:100%;
   object-fit:cover;
-  object-position:center center;
-  opacity:1;
+  object-position:center;
   max-width:none;
   max-height:none;
-  transform:none;
-  filter:saturate(.88) contrast(1.02) brightness(.78);
-  -webkit-mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.04) 5%,rgba(0,0,0,.32) 12%,#000 23%,#000 77%,rgba(0,0,0,.32) 88%,rgba(0,0,0,.04) 95%,transparent 100%);
-  mask-image:linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.04) 5%,rgba(0,0,0,.32) 12%,#000 23%,#000 77%,rgba(0,0,0,.32) 88%,rgba(0,0,0,.04) 95%,transparent 100%);
+  border:0;
+  margin:0;
+  padding:0;
+  pointer-events:none;
+  user-select:none;
+  background:transparent;
+  filter:saturate(.90) contrast(1.02) brightness(.78);
+  will-change:clip-path,transform,opacity,filter;
+}
+
+.current-video{opacity:1}
+.incoming-video{opacity:0}
+
+.ambient{
+  position:absolute;
+  pointer-events:none;
+  overflow:hidden;
+  z-index:1;
+  opacity:0;
+}
+
+.ambient-video{
+  position:absolute;
+  inset:-10%;
+  width:120%;
+  height:120%;
+  object-fit:cover;
+  object-position:center;
+  filter:blur(34px) saturate(1.2) brightness(.62);
+  transform:scale(1.06);
+  pointer-events:none;
+}
+
+.ambient-left{
+  left:-30%;
+  top:8%;
+  width:62%;
+  height:84%;
+  opacity:.30;
+  -webkit-mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.12) 24%,#000 58%,rgba(0,0,0,.10) 100%);
+  mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.12) 24%,#000 58%,rgba(0,0,0,.10) 100%);
   -webkit-mask-repeat:no-repeat;
   mask-repeat:no-repeat;
   -webkit-mask-size:100% 100%;
   mask-size:100% 100%;
-  mix-blend-mode:screen;
-}
-.video-previous{opacity:1;}
-.video-current{z-index:2;}
-.layer.canvas-switching .video-current{animation:canvasSwitchCurrent 900ms cubic-bezier(.22,.61,.36,1) both;}
-.layer.canvas-switching .video-previous{animation:canvasSwitchPrevious 900ms cubic-bezier(.22,.61,.36,1) both;}
-.layer.canvas-entering,
-.layer.canvas-immersive-entering{
-  clip-path:polygon(50% 46%,54% 49%,58% 50%,54% 51%,50% 54%,46% 51%,42% 50%,46% 49%);
-  animation:canvasStarReveal 820ms cubic-bezier(.16,1,.3,1) forwards;
-}
-.layer.canvas-immersive-entering .video-current{
-  animation:canvasImmersiveSpin 820ms cubic-bezier(.12,.72,.22,1) both;
-}
-.layer.canvas-immersive-exiting{
-  animation:canvasStarReverse 650ms cubic-bezier(.65,0,.84,.15) both;
-}
-.lyrics-ambience,
-.immersive-ambience{
-  position:absolute;
-  pointer-events:none;
-  z-index:0;
-  overflow:hidden;
-}
-.lyrics-ambience{
-  left:-18%;
-  top:-8%;
-  width:60%;
-  height:116%;
-  opacity:.28;
-  filter:blur(32px) saturate(1.18) contrast(1.04);
-  transform:scale(1.08);
-  transform-origin:center right;
-  mask-image:linear-gradient(to right,transparent 0%,#000 28%,#000 78%,transparent 100%);
-  -webkit-mask-image:linear-gradient(to right,transparent 0%,#000 28%,#000 78%,transparent 100%);
-}
-.immersive-ambience{
-  inset:-18%;
-  opacity:.34;
-  filter:blur(34px) saturate(1.2) contrast(1.03);
-  transform:scale(1.08);
-  mask-image:radial-gradient(ellipse at center,#000 42%,rgba(0,0,0,.72) 58%,transparent 88%);
-  -webkit-mask-image:radial-gradient(ellipse at center,#000 42%,rgba(0,0,0,.72) 58%,transparent 88%);
-}
-.ambient-video{
-  position:absolute;
-  inset:0;
-  width:100%;
-  height:100%;
-  object-fit:cover;
-  opacity:1;
-  mix-blend-mode:screen;
-}
-@keyframes canvasStarReveal{
-  from{clip-path:polygon(50% 46%,54% 49%,58% 50%,54% 51%,50% 54%,46% 51%,42% 50%,46% 49%);}
-  to{clip-path:polygon(0% 0%,100% 0%,100% 50%,100% 100%,0% 100%,0% 50%,0% 50%,0% 0%);}
-}
-@keyframes canvasStarReverse{
-  from{
-    clip-path:polygon(0% 0%,100% 0%,100% 50%,100% 100%,0% 100%,0% 50%,0% 50%,0% 0%);
-    transform:scale(1) rotate(0deg);
-  }
-  to{
-    clip-path:polygon(50% 46%,54% 49%,58% 50%,54% 51%,50% 54%,46% 51%,42% 50%,46% 49%);
-    transform:scale(.86) rotate(360deg);
-  }
-}
-@keyframes canvasImmersiveSpin{
-  0%{transform:scale(.84) rotate(-360deg);filter:saturate(.75) contrast(1) brightness(.72);}
-  64%{transform:scale(1.015) rotate(12deg);filter:saturate(.88) contrast(1.02) brightness(.78);}
-  100%{transform:scale(1) rotate(0deg);filter:saturate(.88) contrast(1.02) brightness(.78);}
-}
-@keyframes canvasSwitchCurrent{
-  0%{opacity:0;transform:scale(1.035);filter:blur(10px) saturate(.72) brightness(.72);}
-  55%{opacity:1;transform:scale(1.005);filter:blur(1.5px) saturate(.88) brightness(.78);}
-  100%{opacity:1;transform:scale(1);filter:blur(0) saturate(.88) contrast(1.02) brightness(.78);}
-}
-@keyframes canvasSwitchPrevious{
-  0%{opacity:1;transform:scale(1);filter:blur(0);}
-  45%{opacity:.72;transform:scale(.99);filter:blur(1px);}
-  100%{opacity:0;transform:scale(.975);filter:blur(8px);}
 }
 
+.ambient-frame{
+  inset:-5%;
+  opacity:.42;
+  clip-path:polygon(
+    0 0,100% 0,100% 18%,84% 18%,84% 82%,100% 82%,
+    100% 100%,0 100%,0 82%,16% 82%,16% 18%,0 18%
+  );
+}
+
+.canvas-shell.immersive.visible .ambient-frame{opacity:.46}
+
+@keyframes canvas-star-open{
+  0%{
+    clip-path:polygon(50% 42%,54% 48%,59% 50%,54% 52%,50% 58%,46% 52%,41% 50%,46% 48%);
+    transform:scale(.72);
+    opacity:.18;
+    filter:blur(7px) saturate(.86) brightness(.70);
+  }
+  28%{
+    clip-path:polygon(50% 23%,65% 45%,77% 50%,65% 55%,50% 77%,35% 55%,23% 50%,35% 45%);
+    transform:scale(.94);
+    opacity:.62;
+    filter:blur(2.5px) saturate(.88) brightness(.74);
+  }
+  58%{
+    clip-path:polygon(0 0,100% 0,100% 28%,100% 72%,100% 100%,0 100%,0 72%,0 28%);
+    transform:scale(1.012);
+    opacity:.92;
+    filter:blur(.6px) saturate(.90) brightness(.77);
+  }
+  100%{
+    clip-path:polygon(0 0,100% 0,100% 28%,100% 72%,100% 100%,0 100%,0 72%,0 28%);
+    transform:scale(1);
+    opacity:1;
+    filter:saturate(.90) contrast(1.02) brightness(.78);
+  }
+}
+
+@keyframes canvas-switch-in{
+  0%{
+    clip-path:polygon(50% 44%,54% 48%,57% 50%,54% 52%,50% 56%,46% 52%,43% 50%,46% 48%);
+    opacity:0;
+    transform:scale(1.045);
+    filter:blur(9px) saturate(.86) brightness(.72);
+  }
+  42%{
+    clip-path:polygon(50% 18%,74% 44%,88% 50%,74% 56%,50% 82%,26% 56%,12% 50%,26% 44%);
+    opacity:.68;
+    transform:scale(1.018);
+    filter:blur(3.2px) saturate(.89) brightness(.76);
+  }
+  100%{
+    clip-path:polygon(0 0,100% 0,100% 28%,100% 72%,100% 100%,0 100%,0 72%,0 28%);
+    opacity:1;
+    transform:scale(1);
+    filter:saturate(.90) contrast(1.02) brightness(.78);
+  }
+}
+
+@keyframes canvas-switch-out{
+  0%{opacity:1;transform:scale(1);filter:saturate(.90) contrast(1.02) brightness(.78)}
+  55%{opacity:.45;transform:scale(1.018);filter:blur(2.5px) saturate(.88) brightness(.76)}
+  100%{opacity:0;transform:scale(1.035);filter:blur(7px) saturate(.84) brightness(.72)}
+}
+
+@keyframes canvas-immersive-enter{
+  0%{
+    clip-path:polygon(50% 42%,54% 48%,59% 50%,54% 52%,50% 58%,46% 52%,41% 50%,46% 48%);
+    transform:scale(.28) rotate(720deg);
+    opacity:.10;
+    filter:blur(10px) saturate(.80) brightness(.66);
+  }
+  24%{
+    clip-path:polygon(50% 25%,66% 45%,78% 50%,66% 55%,50% 75%,34% 55%,22% 50%,34% 45%);
+    transform:scale(.54) rotate(420deg);
+    opacity:.42;
+    filter:blur(5px) saturate(.84) brightness(.70);
+  }
+  58%{
+    clip-path:polygon(0 0,100% 0,100% 28%,100% 72%,100% 100%,0 100%,0 72%,0 28%);
+    transform:scale(1.015) rotate(48deg);
+    opacity:.90;
+    filter:blur(1.3px) saturate(.89) brightness(.76);
+  }
+  82%{transform:scale(1.004) rotate(8deg)}
+  100%{
+    clip-path:polygon(0 0,100% 0,100% 28%,100% 72%,100% 100%,0 100%,0 72%,0 28%);
+    transform:scale(1) rotate(0deg);
+    opacity:1;
+    filter:saturate(.90) contrast(1.02) brightness(.78);
+  }
+}
+
+@keyframes canvas-immersive-exit{
+  0%{
+    clip-path:polygon(0 0,100% 0,100% 28%,100% 72%,100% 100%,0 100%,0 72%,0 28%);
+    transform:scale(1) rotate(0deg);
+    opacity:1;
+  }
+  24%{transform:scale(1.008) rotate(-45deg);filter:blur(1.2px) saturate(.89) brightness(.76)}
+  62%{
+    clip-path:polygon(50% 25%,66% 45%,78% 50%,66% 55%,50% 75%,34% 55%,22% 50%,34% 45%);
+    transform:scale(.56) rotate(-420deg);
+    opacity:.48;
+    filter:blur(5px) saturate(.84) brightness(.70);
+  }
+  100%{
+    clip-path:polygon(50% 42%,54% 48%,59% 50%,54% 52%,50% 58%,46% 52%,41% 50%,46% 48%);
+    transform:scale(.24) rotate(-720deg);
+    opacity:0;
+    filter:blur(10px) saturate(.80) brightness(.66);
+  }
+}
+
+@keyframes canvas-leave{
+  0%{
+    clip-path:polygon(0 0,100% 0,100% 28%,100% 72%,100% 100%,0 100%,0 72%,0 28%);
+    opacity:1;
+    transform:scale(1);
+  }
+  100%{
+    clip-path:polygon(50% 42%,54% 48%,59% 50%,54% 52%,50% 58%,46% 52%,41% 50%,46% 48%);
+    opacity:0;
+    transform:scale(.78);
+    filter:blur(6px);
+  }
+}
+
+.canvas-shell.entering .current-video{animation:canvas-star-open 760ms cubic-bezier(.22,.72,.18,1) both}
+.canvas-shell.switching .incoming-video{animation:canvas-switch-in 760ms cubic-bezier(.18,.76,.22,1) both;opacity:1}
+.canvas-shell.switching .current-video{animation:canvas-switch-out 760ms cubic-bezier(.22,.72,.2,1) both}
+.canvas-shell.immersive-enter .current-video{animation:canvas-immersive-enter 900ms cubic-bezier(.16,.76,.2,1) both}
+.canvas-shell.immersive-exit .current-video{animation:canvas-immersive-exit 700ms cubic-bezier(.18,.74,.2,1) both}
+.canvas-shell.leaving .current-video{animation:canvas-leave 700ms cubic-bezier(.22,.68,.18,1) both}
+
 @media (prefers-reduced-motion: reduce){
-  .video{visibility:hidden!important;}
+  .canvas-shell,.canvas-video,.ambient{animation:none!important;transition:none!important}
+  .canvas-video{opacity:1!important;filter:saturate(.90) contrast(1.02) brightness(.78)!important}
+  .canvas-shell{opacity:1!important}
 }
 </style>

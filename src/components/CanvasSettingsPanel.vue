@@ -50,9 +50,7 @@ async function selectPlacement(value: CanvasPlacement) {
           {{ option[1] }}
         </button>
       </div>
-      <small class="placement-hint">
-        Immersive placement only activates when Cider's Immersive style is <strong>One</strong>.
-      </small>
+      <small class="placement-hint">Immersive uses Cider's <strong>One</strong> style only.</small>
     </div>
 
     <div class="field">

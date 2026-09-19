@@ -12,7 +12,7 @@ const phase = ref<"idle" | "entering" | "switching">("idle");
 
 let animationTimer: number | null = null;
 let watchdog: number | null = null;
-let lastUrl = "";
+
 
 const reducedMotionQuery = ref<MediaQueryList | null>(null);
 const reducedMotion = computed(() => Boolean(reducedMotionQuery.value?.matches));
@@ -61,7 +61,6 @@ function setUrl(url: string) {
   if (!currentUrl.value) {
     currentUrl.value = url;
     incomingUrl.value = "";
-    lastUrl = url;
     setPhase("entering", 900);
     void syncVideos();
     return;
@@ -77,19 +76,10 @@ function setUrl(url: string) {
   animationTimer = window.setTimeout(() => {
     currentUrl.value = incomingUrl.value;
     incomingUrl.value = "";
-    lastUrl = currentUrl.value;
     animationTimer = null;
     phase.value = "idle";
     void syncVideos();
   }, 760);
-}
-
-function syncState() {
-  if (canvasUrl.value && canvasActive.value) {
-    if (canvasUrl.value !== lastUrl || currentUrl.value !== canvasUrl.value) {
-      setUrl(canvasUrl.value);
-    }
-  }
 }
 
 watch(

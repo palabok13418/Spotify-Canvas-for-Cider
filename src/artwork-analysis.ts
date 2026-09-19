@@ -107,7 +107,7 @@ export function findAppleAnimatedArtworkUrl(): string | null {
     if (isMediaUrl(url) && !candidates.includes(url)) candidates.push(url);
   }
 
-  collectObjectUrls(item, candidates, new Set());
+  collectObjectUrls(item, candidates, new Set<object>());
 
   const visible = findAppleAnimatedArtworkVideo();
   const visibleSource = visible ? normalizeMediaUrl(visible.currentSrc || visible.src) : "";

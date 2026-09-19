@@ -106,3 +106,19 @@ export function definePluginContext(options: PluginDefinition) {
     useCPlugin: () => plugin
   };
 }
+
+
+export interface CustomImmersiveLayout {
+  name: string;
+  identifier: string;
+  component: string;
+  type?: "normal" | "portrait";
+}
+
+export function addImmersiveLayout(layout: CustomImmersiveLayout) {
+  const manager = (globalThis as any).__PLUGINSYS__?.Components?.ImmersiveLayouts;
+  if (!manager || typeof manager.addLayout !== "function") {
+    throw new Error("Cider Immersive Layout API is unavailable.");
+  }
+  return manager.addLayout(layout);
+}

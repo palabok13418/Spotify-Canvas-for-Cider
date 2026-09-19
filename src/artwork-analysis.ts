@@ -266,7 +266,6 @@ export async function analyzeCanvasAgainstAppleArtwork(
   signal?: AbortSignal,
 ): Promise<AppleArtworkAnalysis> {
   const visibleApple = findAppleAnimatedArtworkVideo();
-  const storeItem = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore?.nowPlayingItem;
   const appleUrl = findAppleAnimatedArtworkUrl();
 
   if (!visibleApple && !appleUrl) {

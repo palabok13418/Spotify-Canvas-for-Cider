@@ -127,6 +127,7 @@ async function analyzeAndActivate(
   identity: string,
   result: ResolveResult,
   signal: AbortSignal,
+  expectedSequence: number,
 ) {
   if (!result.canvasUrl) return;
 
@@ -156,7 +157,7 @@ async function analyzeAndActivate(
     }
   }
 
-  if (signal.aborted || seq <= 0 || identity !== activeTrackIdentity) return;
+  if (signal.aborted || expectedSequence !== sequence || identity !== activeTrackIdentity) return;
 
   canvasAnalysisPending.value = false;
   analysisCache.set(identity, analysis.duplicate);
@@ -249,7 +250,7 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
 
     if (data.canvasUrl) {
       cachePut(expectedIdentity, data);
-      await analyzeAndActivate(expectedIdentity, data, controller.signal);
+      await analyzeAndActivate(expectedIdentity, data, controller.signal, seq);
     } else {
       canvasActive.value = false;
       canvasAnalysisPending.value = false;

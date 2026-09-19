@@ -89,7 +89,19 @@ export function getCurrentTrack(): CurrentTrack {
     ""
   ).trim();
   const durationMs = numberOrNull(attrs.durationInMillis ?? attrs.durationMs ?? null);
-  const isrc = String(attrs.isrc || attrs.ISRC || attrs.externalIds?.isrc || item?.isrc || "").trim();
+  const isrc = String(
+    attrs.isrc ||
+    attrs.ISRC ||
+    attrs.externalIds?.isrc ||
+    attrs.externalIds?.isrcs?.[0] ||
+    attrs.songInfo?.isrc ||
+    attrs.metadata?.isrc ||
+    attrs.reporting?.isrc ||
+    attrs.meta?.isrc ||
+    item?.isrc ||
+    item?.attributes?.isrc ||
+    ""
+  ).trim();
   const releaseDate = String(attrs.releaseDate || attrs.release_date || "").trim();
   const releaseYearMatch = /^(\d{4})/.exec(releaseDate);
   const releaseYear = releaseYearMatch ? Number(releaseYearMatch[1]) : null;

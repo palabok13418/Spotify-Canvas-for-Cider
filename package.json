@@ -1,6 +1,6 @@
 {
   "name": "canvas-for-cider-palabok13418",
-  "version": "2.7.6",
+  "version": "2.8.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -8,7 +8,8 @@
     "build": "vue-tsc -b && vite build",
     "check": "vue-tsc -b --pretty false",
     "pack": "npm run build && node scripts/pack.mjs",
-    "sanity": "node scripts/sanity.mjs"
+    "sanity": "node scripts/sanity.mjs",
+    "test": "node scripts/sanity.mjs"
   },
   "dependencies": {
     "jszip": "^3.10.1",

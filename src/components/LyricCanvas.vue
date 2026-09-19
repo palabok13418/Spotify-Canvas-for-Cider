@@ -551,7 +551,6 @@ function startPersistentLatch(url: string, reason: string) {
 function stopPortal() {
   clearLatch();
   lastTargetHost = null;
-  clearImmersiveHost();
   if (rootEl) rootEl.style.setProperty("display", "none", "important");
   previousCanvasUrl.value = "";
   animationState.value = "idle";
@@ -701,7 +700,6 @@ onUnmounted(() => {
   if (animationTimer !== null) window.clearTimeout(animationTimer);
   immersiveEventCleanup.forEach(fn => fn());
   immersiveEventCleanup = [];
-  clearImmersiveHost();
   document.querySelectorAll<HTMLElement>(".canvascider-navigation-contrast").forEach((el) => {
     el.classList.remove("canvascider-navigation-contrast");
   });

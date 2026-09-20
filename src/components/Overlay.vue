@@ -203,7 +203,7 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
 
   const cached = cacheGet(expectedIdentity);
   if (cached) {
-    applyCachedResult(track, expectedIdentity, cached);
+    await applyCachedResult(track, expectedIdentity, cached);
     return;
   }
 

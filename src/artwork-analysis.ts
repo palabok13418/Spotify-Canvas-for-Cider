@@ -18,8 +18,9 @@ function normalizeMediaUrl(value: unknown) {
 }
 
 function isMediaUrl(value: string) {
-  return /^(https?:|blob:)/i.test(value) &&
-    /\.(?:mp4|mov|m4v|m3u8)(?:[?#].*)?$/i.test(value);
+  const candidate = String(value || "").trim();
+  if (/^blob:/i.test(candidate)) return true;
+  return /^https?:/i.test(candidate) && /\.(?:mp4|mov|m4v|m3u8)(?:[?#].*)?$/i.test(candidate);
 }
 
 function collectObjectUrls(value: unknown, output: string[], seen: Set<object>, depth = 0) {

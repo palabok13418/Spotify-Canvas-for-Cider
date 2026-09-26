@@ -50,6 +50,8 @@ export function ensureSpotifyWebPlayer() {
 
   const features = [
     'popup=yes',
+    'show=false',
+    'skipTaskbar=true',
     'width=2',
     'height=2',
     'left=-32000',

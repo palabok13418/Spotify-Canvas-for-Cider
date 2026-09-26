@@ -345,15 +345,6 @@ async function findSpotifyTrack(cider: {
   }
 }
 async function mirrorTrackInWebPlayer(track: SpotifyTrack, positionMs: number) {
-  const opened = playSpotifyWebTrack(track.uri, positionMs);
-  if (!opened) {
-    return false;
-  }
-
-  return true;
-}
-
-async function mirrorTrackInWebPlayer(track: SpotifyTrack, positionMs: number) {
   return playSpotifyWebTrack(track.uri, positionMs);
 }
 

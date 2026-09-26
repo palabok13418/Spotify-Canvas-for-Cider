@@ -143,6 +143,7 @@ function registerSpotifyLoginButton() {
         element: 'Log in',
         location: 'chrome-top/right',
         title: 'Log in to Spotify',
+        menuElement: customElementName('spotify-notes-panel'),
         onClick: () => openSpotifyLogin(),
       });
 

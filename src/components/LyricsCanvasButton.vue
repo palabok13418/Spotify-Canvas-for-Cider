@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onMounted, onUnmounted, ref, nextTick, watch } from "vue";
 import QuickSettings from "./QuickSettings.vue";
-import iconSvg from "../assets/logo.svg?raw";
+import iconSvg from "../../icon.svg?raw";
 
 const PREFIX = "[Canvas for Cider]";
 const open = ref(false);

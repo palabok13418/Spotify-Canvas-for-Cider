@@ -91,6 +91,185 @@ function findAppleAnimatedArtworkVideo() {
   return visibleAppleArtworkVideos()[0] || null;
 }
 
+
+function findStaticArtworkUrl(): string | null {
+  const item = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore?.nowPlayingItem;
+  const attrs = item?.attributes || item || {};
+  const values = [
+    attrs?.artwork?.url,
+    attrs?.artworkUrl,
+    attrs?.artworkURL,
+    attrs?.artwork?.urlTemplate,
+    ...(navigator.mediaSession?.metadata?.artwork || []).map((entry: any) => entry?.src),
+  ];
+
+  for (const raw of values) {
+    const value = normalizeMediaUrl(raw)
+      .replace(/\{w\}/gi, "1200")
+      .replace(/\{h\}/gi, "1200")
+      .replace(/\{f\}/gi, "jpg")
+      .replace(/\{c\}/gi, "bb")
+      .trim();
+    if (/^https?:/i.test(value)) return value;
+  }
+
+  return null;
+}
+
+async function createImageProbe(url: string): Promise<HTMLImageElement | null> {
+  const image = new Image();
+  image.crossOrigin = "anonymous";
+  image.decoding = "async";
+
+  try {
+    await new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timer = window.setTimeout(() => finish(new Error("artwork probe timed out")), PROBE_TIMEOUT_MS);
+
+      const finish = (error?: unknown) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(timer);
+        image.onload = null;
+        image.onerror = null;
+        if (error) reject(error);
+        else resolve();
+      };
+
+      image.onload = () => finish();
+      image.onerror = () => finish(new Error("artwork image failed"));
+      image.src = url;
+    });
+
+    return image.naturalWidth > 0 && image.naturalHeight > 0 ? image : null;
+  } catch {
+    return null;
+  }
+}
+
+function captureImageSignature(image: HTMLImageElement, canvas: HTMLCanvasElement): number[] | null {
+  canvas.width = 32;
+  canvas.height = 32;
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx || image.naturalWidth < 1 || image.naturalHeight < 1) return null;
+
+  try {
+    const side = Math.min(image.naturalWidth, image.naturalHeight);
+    const sx = (image.naturalWidth - side) / 2;
+    const sy = (image.naturalHeight - side) / 2;
+    ctx.clearRect(0, 0, 32, 32);
+    ctx.drawImage(image, sx, sy, side, side, 0, 0, 32, 32);
+    const data = ctx.getImageData(0, 0, 32, 32).data;
+    const signature: number[] = [];
+    for (let i = 0; i < data.length; i += 4) {
+      signature.push(data[i] / 255, data[i + 1] / 255, data[i + 2] / 255);
+    }
+    return signature;
+  } catch {
+    return null;
+  }
+}
+
+function frameMotion(frames: number[][]) {
+  if (frames.length < 2) return 0;
+  let total = 0;
+  for (let i = 1; i < frames.length; i++) {
+    total += 1 - frameSimilarity(frames[i - 1], frames[i]);
+  }
+  return total / (frames.length - 1);
+}
+
+function frameDiversity(frames: number[][]) {
+  if (frames.length < 2) return 0;
+  let total = 0;
+  let count = 0;
+  for (let i = 0; i < frames.length; i++) {
+    for (let j = i + 1; j < frames.length; j++) {
+      total += 1 - frameSimilarity(frames[i], frames[j]);
+      count++;
+    }
+  }
+  return count ? total / count : 0;
+}
+
+const ANALYZER_MODEL = {
+  w1: [
+    3.10, 2.60, 2.00, 2.40, 1.80,
+    1.20, 2.40, 1.80, 2.80, 2.10,
+    2.40, 1.90, 2.30, 2.50, 1.70,
+    1.40, 2.00, 1.30, 2.60, 2.20,
+  ],
+  b1: [-4.1, -4.0, -4.2, -4.3],
+  w2: [1.10, 1.25, 1.15, 1.05],
+  b2: -1.55,
+};
+
+function javascriptModelScore(features: number[]) {
+  const hidden: number[] = [];
+  for (let unit = 0; unit < 4; unit++) {
+    let value = ANALYZER_MODEL.b1[unit];
+    for (let i = 0; i < 5; i++) {
+      value += features[i] * ANALYZER_MODEL.w1[unit * 5 + i];
+    }
+    hidden.push(Math.max(0, value));
+  }
+
+  const logit = ANALYZER_MODEL.b2 +
+    hidden.reduce((sum, value, index) => sum + value * ANALYZER_MODEL.w2[index], 0);
+  return 1 / (1 + Math.exp(-logit));
+}
+
+async function webNNModelScore(features: number[]): Promise<number | null> {
+  const ml = (navigator as any).ml;
+  const Builder = (globalThis as any).MLGraphBuilder;
+  if (!ml?.createContext || typeof Builder !== "function") return null;
+
+  try {
+    const context = await ml.createContext({ powerPreference: "low-power" });
+    const builder = new Builder(context);
+    const input = builder.input("features", { dataType: "float32", shape: [1, 5] });
+    const w1 = builder.constant(
+      { dataType: "float32", shape: [5, 4] },
+      new Float32Array(ANALYZER_MODEL.w1),
+    );
+    const b1 = builder.constant(
+      { dataType: "float32", shape: [1, 4] },
+      new Float32Array(ANALYZER_MODEL.b1),
+    );
+    const w2 = builder.constant(
+      { dataType: "float32", shape: [4, 1] },
+      new Float32Array(ANALYZER_MODEL.w2),
+    );
+    const b2 = builder.constant(
+      { dataType: "float32", shape: [1, 1] },
+      new Float32Array([ANALYZER_MODEL.b2]),
+    );
+
+    const hidden = builder.relu(builder.gemm(input, w1, { c: b1 }));
+    const logit = builder.gemm(hidden, w2, { c: b2 });
+    const one = builder.constant(
+      { dataType: "float32", shape: [1, 1] },
+      new Float32Array([1]),
+    );
+    const probability = builder.reciprocal(builder.add(one, builder.exp(builder.neg(logit))));
+    const graph = await builder.build({ probability });
+
+    if (typeof context.compute === "function") {
+      const output = new Float32Array(1);
+      await context.compute(
+        graph,
+        { features: Float32Array.from(features) },
+        { probability: output },
+      );
+      return Number.isFinite(output[0]) ? Math.max(0, Math.min(1, output[0])) : null;
+    }
+  } catch {
+    return null;
+  }
+
+  return null;
+}
+
 export function findAppleAnimatedArtworkUrl(): string | null {
   const item = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore?.nowPlayingItem;
   const candidates: string[] = [];
@@ -291,9 +470,10 @@ export async function analyzeCanvasAgainstAppleArtwork(
   signal?: AbortSignal,
 ): Promise<AppleArtworkAnalysis> {
   const visibleApple = findAppleAnimatedArtworkVideo();
-  const appleUrl = findAppleAnimatedArtworkUrl();
+  const appleAnimatedUrl = findAppleAnimatedArtworkUrl();
+  const staticArtworkUrl = findStaticArtworkUrl();
 
-  if (!visibleApple && !appleUrl) {
+  if (!visibleApple && !appleAnimatedUrl && !staticArtworkUrl) {
     return {
       duplicate: false,
       confidence: 0,
@@ -302,73 +482,160 @@ export async function analyzeCanvasAgainstAppleArtwork(
   }
 
   if (signal?.aborted) {
-    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: appleUrl || undefined };
+    return {
+      duplicate: false,
+      confidence: 0,
+      reason: "probe-failed",
+      appleArtworkUrl: staticArtworkUrl || appleAnimatedUrl || undefined,
+    };
   }
 
-  let appleVideo = visibleApple;
-  let spotifyVideo: HTMLVideoElement | null = null;
+  let appleVideo: HTMLVideoElement | null = visibleApple;
+  let ownedAppleVideo = false;
 
-  if (!appleVideo && appleUrl) appleVideo = await createProbe(appleUrl);
-  if (signal?.aborted || !appleVideo) {
+  if (!appleVideo && appleAnimatedUrl) {
+    appleVideo = await createProbe(appleAnimatedUrl);
+    ownedAppleVideo = true;
+  }
+
+  const spotifyVideo = await createProbe(canvasUrl);
+  if (!spotifyVideo) {
     appleVideo?.remove();
     return {
       duplicate: false,
       confidence: 0,
-      reason: signal?.aborted ? "probe-failed" : "insufficient-evidence",
-      appleArtworkUrl: appleUrl || undefined,
+      reason: "probe-failed",
+      appleArtworkUrl: staticArtworkUrl || appleAnimatedUrl || undefined,
     };
   }
 
-  spotifyVideo = await createProbe(canvasUrl);
-  if (!spotifyVideo) {
-    if (!visibleApple) appleVideo.remove();
-    return { duplicate: false, confidence: 0, reason: "probe-failed", appleArtworkUrl: appleUrl || undefined };
-  }
+  const artworkImage = staticArtworkUrl
+    ? await createImageProbe(staticArtworkUrl)
+    : null;
 
   try {
-    const appleFrames = visibleApple
-      ? await captureVisiblePlaybackFrames(appleVideo, signal)
-      : await captureFrames(appleVideo);
     const spotifyFrames = await captureFrames(spotifyVideo);
-
-    if (!appleFrames || !spotifyFrames) {
+    if (!spotifyFrames || spotifyFrames.length < 4) {
       return {
         duplicate: false,
         confidence: 0,
         reason: "probe-failed",
-        appleArtworkUrl: appleUrl || undefined,
+        appleArtworkUrl: staticArtworkUrl || appleAnimatedUrl || undefined,
       };
     }
 
-    const visualSimilarity = sequenceSimilarity(appleFrames, spotifyFrames);
-    const metrics = similarityConfidence(visualSimilarity, appleVideo, spotifyVideo);
+    let animatedSimilarity = 0;
+    if (appleVideo) {
+      const appleFrames = visibleApple
+        ? await captureVisiblePlaybackFrames(appleVideo, signal)
+        : await captureFrames(appleVideo);
 
-    // Require strong visual agreement. Aspect ratio and duration only reinforce
-    // a visual match; they never declare two unrelated videos identical.
-    const duplicate = metrics.ratioClose &&
-      visualSimilarity >= 0.90 &&
-      metrics.confidence >= 0.92;
+      if (appleFrames?.length) {
+        animatedSimilarity = sequenceSimilarity(appleFrames, spotifyFrames);
+      }
+    }
+
+    const staticCanvas = document.createElement("canvas");
+    const artworkSignature = artworkImage
+      ? captureImageSignature(artworkImage, staticCanvas)
+      : null;
+
+    let staticSimilarity = 0;
+    let coverPersistence = 0;
+    if (artworkSignature) {
+      const values = spotifyFrames
+        .map(frame => frameSimilarity(frame, artworkSignature))
+        .sort((a, b) => a - b);
+      const median = values[Math.floor(values.length / 2)] || 0;
+      coverPersistence = values.filter(value => value >= 0.90).length / values.length;
+      staticSimilarity = median * 0.70 +
+        coverPersistence * 0.30;
+    }
+
+    const motion = frameMotion(spotifyFrames);
+    const diversity = frameDiversity(spotifyFrames);
+    const consistency = artworkSignature
+      ? Math.max(
+          0,
+          1 - Math.sqrt(
+            spotifyFrames
+              .map(frame => frameSimilarity(frame, artworkSignature))
+              .reduce((sum, value, _, values) => {
+                const mean = values.reduce((a, b) => a + b, 0) / values.length;
+                return sum + (value - mean) ** 2;
+              }, 0) / spotifyFrames.length
+          ) * 4,
+        )
+      : 0;
+
+    const baseSimilarity = artworkSignature
+      ? staticSimilarity
+      : animatedSimilarity;
+
+    const features = [
+      baseSimilarity,
+      1 - Math.min(1, motion * 4.5),
+      artworkSignature ? consistency : Math.max(0, Math.min(1, animatedSimilarity)),
+      1 - Math.min(1, diversity * 3.5),
+      artworkSignature ? coverPersistence : Math.max(0, Math.min(1, animatedSimilarity)),
+    ];
+
+    const webnn = await webNNModelScore(features);
+    const mlProbability = webnn ?? javascriptModelScore(features);
+
+    // Static album-cover Canvas: very high visual persistence + low temporal
+    // diversity/motion. Real MV Canvas: one cover-like frame is fine, but later
+    // scenes must diverge enough to avoid suppression.
+    const duplicate =
+      Boolean(artworkSignature) &&
+      staticSimilarity >= 0.90 &&
+      coverPersistence >= 0.66 &&
+      motion <= 0.095 &&
+      diversity <= 0.125 &&
+      mlProbability >= 0.60;
+
+    const confidence = Math.max(
+      0,
+      Math.min(
+        1,
+        baseSimilarity * 0.50 +
+        coverPersistence * 0.20 +
+        (1 - Math.min(1, motion * 4.5)) * 0.12 +
+        (1 - Math.min(1, diversity * 3.5)) * 0.08 +
+        mlProbability * 0.10,
+      ),
+    );
+
+    const reason: AppleArtworkAnalysis["reason"] = duplicate
+      ? "matched"
+      : motion >= 0.10 || diversity >= 0.15
+        ? "motion-video"
+        : confidence < 0.35
+          ? "insufficient-evidence"
+          : "not-similar";
 
     return {
       duplicate,
-      confidence: metrics.confidence,
-      reason: duplicate ? "matched" : "not-similar",
-      appleArtworkUrl: appleUrl || undefined,
+      confidence,
+      reason,
+      appleArtworkUrl: staticArtworkUrl || appleAnimatedUrl || undefined,
     };
   } catch {
     return {
       duplicate: false,
       confidence: 0,
       reason: "probe-failed",
-      appleArtworkUrl: appleUrl || undefined,
+      appleArtworkUrl: staticArtworkUrl || appleAnimatedUrl || undefined,
     };
   } finally {
     spotifyVideo.remove();
-    if (!visibleApple) appleVideo.remove();
+    if (ownedAppleVideo) appleVideo?.remove();
+    artworkImage?.remove?.();
   }
 }
 
 export const artworkAnalysisInfo = {
   timeoutMs: PROBE_TIMEOUT_MS,
   samples: SAMPLE_POINTS.length,
+  model: "5-feature MLP with WebNN acceleration and JavaScript fallback",
 };

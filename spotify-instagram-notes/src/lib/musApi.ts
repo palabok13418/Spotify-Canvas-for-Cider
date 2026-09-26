@@ -77,12 +77,18 @@ export async function refreshSpotifyToken(refreshToken: string): Promise<Spotify
 }
 
 export async function spotifyApi<T>(accessToken: string, path: string, method = 'GET', body?: unknown): Promise<T> {
-  return postJson<T>('/api/spotify/proxy', {
-    targetUrl: `https://api.spotify.com/v1${path}`,
-    method,
-    accessToken,
-    body,
-  });
+  try {
+    return await postJson<T>('/api/spotify/proxy', {
+      targetUrl: `https://api.spotify.com/v1${path}`,
+      method,
+      accessToken,
+      body,
+    });
+  } catch (error: any) {
+    error.spotifyPath = path;
+    error.spotifyMethod = method;
+    throw error;
+  }
 }
 
 export async function listDevices(accessToken: string): Promise<SpotifyDevice[]> {
@@ -148,7 +154,16 @@ export async function resolveSpotifyTrack(input: {
 
   const data = await response.json().catch(() => null);
 
-  if (!response.ok || !data?.ok || !data?.id || !data?.uri) {
+  if (!response.ok) {
+    const error: any = new Error(
+      String(data?.detail || data?.error || `Mus-API resolver returned ${response.status}`)
+    );
+    error.status = response.status;
+    error.detail = data?.detail || null;
+    throw error;
+  }
+
+  if (!data?.ok || !data?.id || !data?.uri) {
     return null;
   }
 

@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import PluginConfig from './src/plugin.config';
+import PluginConfig from './src/plugin.config.ts';
 
 const manifest = () => [
   `ce_prefix: ${PluginConfig.ce_prefix}`,
@@ -19,6 +19,7 @@ const manifest = () => [
 
 const manifestPlugin = (): Plugin => ({
   name: 'cider-plugin-manifest',
+  apply: 'build',
   buildStart() {
     this.emitFile({
       fileName: 'plugin.yml',

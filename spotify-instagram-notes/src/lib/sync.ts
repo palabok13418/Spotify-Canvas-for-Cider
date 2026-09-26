@@ -1,5 +1,5 @@
 import { clearAuth, loadAuth, saveAuth } from './storage';
-import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, resolveSpotifyTrack, searchTracks, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
+import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, resolveSpotifyTrack, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
 export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
 
@@ -217,101 +217,24 @@ function toMs(value: unknown) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
 }
 
-async function findSpotifyTrack(
-  token: string,
-  cider: {
-    title: string;
-    artist: string;
-    album: string;
-    isrc: string;
-    durationMs: number;
-  }
-) {
-  // Primary path: use the same Mus-API BitChord resolver that the
-  // working Canvas plugin uses. This gives both features one source
-  // of truth for Apple Music -> Spotify track matching.
-  const serverMatch = await resolveSpotifyTrack({
+async function findSpotifyTrack(cider: {
+  title: string;
+  artist: string;
+  album: string;
+  isrc: string;
+  durationMs: number;
+}) {
+  // Mus-API is the only track-resolution path. It can use the same
+  // stronger matcher as the working Canvas resolver when its local
+  // BitChord matcher cannot confidently identify the track.
+  return resolveSpotifyTrack({
     title: cider.title,
     artist: cider.artist,
     album: cider.album,
     durationMs: cider.durationMs,
     isrc: cider.isrc,
   }).catch(() => null);
-
-  if (serverMatch) return serverMatch;
-
-  // Fallback: use the user's Spotify OAuth token directly if the
-  // server-side matcher is temporarily unavailable.
-  const queries = [
-    ...(cider.isrc ? [`isrc:${cider.isrc}`] : []),
-    `track:"${cider.title.replace(/"/g, '')}" artist:"${cider.artist.replace(/"/g, '')}" album:"${cider.album.replace(/"/g, '')}"`,
-    `track:"${cider.title.replace(/"/g, '')}" artist:"${cider.artist.replace(/"/g, '')}"`,
-    [cider.title, cider.artist, cider.album].filter(Boolean).join(' ')
-  ];
-
-  const candidates: SpotifyTrack[] = [];
-
-  for (const query of queries) {
-    const tracks = await searchTracks(token, query);
-
-    for (const track of tracks) {
-      if (!candidates.some((existing) => existing.id === track.id)) {
-        candidates.push(track);
-      }
-    }
-
-    if (candidates.length >= 30) break;
-  }
-
-  if (!candidates.length) return null;
-
-  const normalize = (value: string) =>
-    String(value || '')
-      .normalize('NFKD')
-      .replace(/\p{Diacritic}/gu, '')
-      .toLowerCase()
-      .replace(/&/g, 'and')
-      .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
-      .replace(/\b(feat\.?|ft\.?)\b.*$/g, ' ')
-      .replace(/[^a-z0-9]+/g, ' ')
-      .replace(/\s+/g, ' ')
-      .trim();
-
-  const scoreTrack = (candidate: SpotifyTrack) => {
-    const wantedTitle = normalize(cider.title);
-    const wantedArtist = normalize(cider.artist);
-    const wantedAlbum = normalize(cider.album);
-    const candidateTitle = normalize(candidate.name);
-    const candidateArtist = normalize(candidate.artists[0] || candidate.artists.join(', '));
-    const candidateAlbum = normalize(candidate.album);
-
-    let score = 0;
-    if (wantedTitle && candidateTitle === wantedTitle) score += 55;
-    else if (wantedTitle && (candidateTitle.includes(wantedTitle) || wantedTitle.includes(candidateTitle))) score += 35;
-
-    if (wantedArtist && candidateArtist === wantedArtist) score += 35;
-    else if (wantedArtist && (candidateArtist.includes(wantedArtist) || wantedArtist.includes(candidateArtist))) score += 20;
-
-    if (wantedAlbum && candidateAlbum === wantedAlbum) score += 8;
-    else if (wantedAlbum && (candidateAlbum.includes(wantedAlbum) || wantedAlbum.includes(candidateAlbum))) score += 4;
-
-    if (cider.durationMs && candidate.durationMs) {
-      const delta = Math.abs(candidate.durationMs - cider.durationMs);
-      if (delta <= 1500) score += 7;
-      else if (delta <= 5000) score += 3;
-    }
-
-    return score;
-  };
-
-  const ranked = candidates
-    .map((track) => ({ track, score: scoreTrack(track) }))
-    .sort((a, b) => b.score - a.score);
-
-  const best = ranked[0];
-  return best && best.score >= 60 ? best.track : null;
 }
-
 async function getPhone(force = false): Promise<SpotifyDevice | null> {
   const now = Date.now();
 
@@ -422,7 +345,7 @@ async function syncOnce() {
           phoneDevice
         });
 
-        currentResolvedTrack = await findSpotifyTrack(token, cider);
+        currentResolvedTrack = await findSpotifyTrack(cider);
       }
 
       if (!currentResolvedTrack) {
@@ -524,7 +447,7 @@ async function syncOnce() {
       }
 
       if (!lastSpotifyUri) {
-        currentResolvedTrack = await findSpotifyTrack(token, cider);
+        currentResolvedTrack = await findSpotifyTrack(cider);
         lastSpotifyUri = currentResolvedTrack?.uri || '';
       }
 

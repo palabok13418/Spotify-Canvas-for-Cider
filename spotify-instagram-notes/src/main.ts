@@ -37,7 +37,11 @@ function toggleMirroring() {
 
   const button = findSpotifyMirroringButton();
   if (button) {
-    button.textContent = next ? 'Pause mirroring' : 'Resume mirroring';
+    const label = next ? 'Pause mirroring' : 'Resume mirroring';
+    button.textContent = label;
+    button.setAttribute('title', label);
+    button.setAttribute('aria-label', label);
+    button.setAttribute('data-tooltip', label);
   }
 }
 
@@ -136,27 +140,6 @@ function findSpotifyLoginButton(): HTMLElement | null {
 
     return label === 'log in' || label === 'log in to spotify';
   }) ?? null;
-}
-
-function moveSpotifyLoginBeforeNotifications() {
-  const loginButton = findSpotifyLoginButton();
-  const notificationButton = findNotificationButton();
-
-  if (!loginButton || !notificationButton) return false;
-  if (loginButton === notificationButton) return true;
-
-  const parent = notificationButton.parentElement;
-  if (!parent) return false;
-
-  if (loginButton.parentElement === parent) {
-    if (loginButton.nextElementSibling !== notificationButton) {
-      parent.insertBefore(loginButton, notificationButton);
-    }
-    return true;
-  }
-
-  parent.insertBefore(loginButton, notificationButton);
-  return true;
 }
 
 function registerSpotifyMirroringButton() {

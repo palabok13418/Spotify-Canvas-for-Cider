@@ -126,7 +126,7 @@ function moveSpotifyLoginBeforeNotifications() {
   return true;
 }
 
-function registerSpotifyLoginButton(customElementName: (name: string) => string) {
+function registerSpotifyLoginButton() {
   let registered = false;
   let attempts = 0;
 
@@ -183,9 +183,6 @@ function registerSpotifyLoginButton(customElementName: (name: string) => string)
 
   window.setTimeout(() => observer.disconnect(), 30000);
 
-  // Keep this parameter in the signature so the function can be called
-  // consistently with the rest of the plugin context.
-  void customElementName;
 }
 
 const { plugin, customElementName } = definePluginContext({
@@ -204,7 +201,7 @@ const { plugin, customElementName } = definePluginContext({
       onClick: () => openPanel(customElementName),
     });
 
-    registerSpotifyLoginButton(customElementName);
+    registerSpotifyLoginButton();
 
     const musApiOrigin = new URL(MUS_API_BASE).origin;
 

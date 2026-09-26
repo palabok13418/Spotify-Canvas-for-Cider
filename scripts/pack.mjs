@@ -18,7 +18,7 @@ const zip = new JSZip();
 function addDir(dir, rel = '') {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const fullPath = path.join(dir, entry.name);
-    const zipPath = path.join(rel, entry.name).replaceAll('\\\\', '/');
+    const zipPath = path.join(rel, entry.name).split(path.sep).join('/');
     if (entry.isDirectory()) addDir(fullPath, zipPath);
     else zip.file(zipPath, fs.readFileSync(fullPath));
   }

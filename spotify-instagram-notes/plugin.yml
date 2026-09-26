@@ -1,0 +1,11 @@
+ce_prefix: cider-spotify-instagram-notes
+identifier: community.palabok13418.spotify-instagram-notes
+name: "Spotify Notes Bridge"
+description: "Mirrors Cider playback to Spotify so supported Instagram listening features can see the track."
+version: 1.0.0
+author: Community
+repo: https://github.com/palabok13418/Spotify-Canvas-for-Cider/tree/main/spotify-instagram-notes
+pluginKitVersion: 4
+entry:
+  plugin.js:
+    type: main

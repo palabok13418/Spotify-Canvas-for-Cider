@@ -1,5 +1,5 @@
 import { clearAuth, loadAuth, saveAuth } from './storage';
-import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, searchTracks, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, searchTracks, spotifyApi, type SpotifyDevice, type SpotifyTrack } from './musApi';
+import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, searchTracks, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
 export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
 

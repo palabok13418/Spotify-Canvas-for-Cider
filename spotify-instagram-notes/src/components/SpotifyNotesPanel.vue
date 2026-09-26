@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from 'vue';
-import { getSnapshot, handleOAuthMessage, isEnabled, onBridgeChange, setEnabled, startBridge } from '../lib/sync';
+import { getSnapshot, isEnabled, onBridgeChange, setEnabled, startBridge } from '../lib/sync';
 import { openSpotifyAuth } from '../lib/musApi';
 
 const snapshot = ref(getSnapshot());
@@ -19,20 +19,13 @@ function toggle() {
   setEnabled(enabled.value);
 }
 
-function onMessage(event: MessageEvent) {
-  if (event.data?.type !== 'musaudio_spotify_oauth') return;
-  handleOAuthMessage(event.data.data);
-}
-
 onMounted(() => {
   off = onBridgeChange((value) => { snapshot.value = value; });
   startBridge();
-  window.addEventListener('message', onMessage);
 });
 
 onBeforeUnmount(() => {
   off();
-  window.removeEventListener('message', onMessage);
 });
 </script>
 

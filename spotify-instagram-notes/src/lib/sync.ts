@@ -1,5 +1,11 @@
 import { clearAuth, loadAuth, saveAuth } from './storage';
-import { resolveSpotifyTrack, MUS_API_BASE, type SpotifyTrack } from './musApi';
+import {
+  muteActiveSpotifyComputer,
+  refreshSpotifyToken,
+  resolveSpotifyTrack,
+  MUS_API_BASE,
+  type SpotifyTrack
+} from './musApi';
 import {
   ensureSpotifyWebPlayer,
   getSpotifyWebPlayerState,
@@ -30,6 +36,13 @@ let lastPlaying = false;
 let lastCiderPositionMs = 0;
 let lastObservedAt = 0;
 let lastPositionSyncAt = 0;
+
+let spotifyAccessToken = '';
+let spotifyAccessTokenExpiresAt = 0;
+let lastDeviceMuteTrack = '';
+let lastDeviceMuteAt = 0;
+let deviceVolumeControlUnavailableUntil = 0;
+let muteGeneration = 0;
 
 let currentResolvedTrack: SpotifyTrack | null = null;
 let lastMatchAttemptKey = '';
@@ -92,6 +105,7 @@ export function setEnabled(value: boolean) {
     return;
   }
 
+  muteGeneration++;
   pauseSpotifyWebPlayer();
   emit({ status: 'disabled', message: 'Spotify mirroring is paused.' });
 }
@@ -344,6 +358,147 @@ async function findSpotifyTrack(cider: {
     return null;
   }
 }
+async function getSpotifyApiAccessToken(forceRefresh = false) {
+  const now = Date.now();
+
+  if (
+    !forceRefresh &&
+    spotifyAccessToken &&
+    spotifyAccessTokenExpiresAt > now + 60_000
+  ) {
+    return spotifyAccessToken;
+  }
+
+  const auth = loadAuth();
+  if (!auth?.refreshToken) return null;
+
+  try {
+    const refreshed = await refreshSpotifyToken(auth.refreshToken);
+    spotifyAccessToken = refreshed.accessToken;
+    spotifyAccessTokenExpiresAt = Number(refreshed.tokenExpMs) || now + 3_300_000;
+
+    if (refreshed.refreshToken && refreshed.refreshToken !== auth.refreshToken) {
+      saveAuth({
+        ...auth,
+        refreshToken: refreshed.refreshToken,
+      });
+    }
+
+    return spotifyAccessToken;
+  } catch (error: any) {
+    warn('could not refresh Spotify API access for automatic Web Player mute', {
+      status: Number(error?.status) || 0,
+      message: String(error?.message || error || 'unknown error'),
+    });
+    return null;
+  }
+}
+
+async function automaticallyMuteSpotifyWebPlayer(reason: string) {
+  const now = Date.now();
+
+  if (!enabled || !lastSpotifyUri || !lastPlaying) return;
+  if (now < deviceVolumeControlUnavailableUntil) return;
+
+  if (
+    lastDeviceMuteTrack === lastSpotifyUri &&
+    now - lastDeviceMuteAt < 8_000
+  ) {
+    return;
+  }
+
+  lastDeviceMuteTrack = lastSpotifyUri;
+  lastDeviceMuteAt = now;
+
+  let accessToken = await getSpotifyApiAccessToken();
+  if (!accessToken) return;
+
+  try {
+    const device = await muteActiveSpotifyComputer(accessToken);
+
+    if (!device) {
+      log('Spotify Web Player device was not visible as an active computer yet', {
+        reason,
+      });
+      return;
+    }
+
+    log('automatically muted Spotify Web Player device', {
+      reason,
+      deviceName: device.name,
+      deviceId: device.id,
+      volumePercent: device.volumePercent,
+    });
+    return;
+  } catch (error: any) {
+    const status = Number(error?.status) || 0;
+
+    // A short-lived 401 normally means the cached API token expired. Refresh
+    // once and retry the exact same volume-zero operation.
+    if (status === 401) {
+      accessToken = await getSpotifyApiAccessToken(true);
+      if (!accessToken) return;
+
+      try {
+        const device = await muteActiveSpotifyComputer(accessToken);
+        if (device) {
+          log('automatically muted Spotify Web Player device after token refresh', {
+            reason,
+            deviceName: device.name,
+            deviceId: device.id,
+            volumePercent: device.volumePercent,
+          });
+        }
+        return;
+      } catch (retryError: any) {
+        warn('Spotify Web Player automatic mute retry failed', {
+          status: Number(retryError?.status) || 0,
+          message: String(retryError?.message || retryError || 'unknown error'),
+        });
+        return;
+      }
+    }
+
+    if (status === 403) {
+      // Do not recreate the old /me/player/devices 403 storm. Mute control is
+      // retried later, but only after the Web Player has had time to reconnect.
+      deviceVolumeControlUnavailableUntil = now + 60_000;
+      warn('Spotify device-volume control is unavailable for this account/session; native WebView2 mute remains the fallback');
+      return;
+    }
+
+    warn('Spotify Web Player automatic mute failed', {
+      status,
+      message: String(error?.message || error || 'unknown error'),
+    });
+  }
+}
+
+function scheduleAutomaticSpotifyMute(reason: string) {
+  const generation = ++muteGeneration;
+  const expectedUri = lastSpotifyUri;
+
+  const attempt = (delayMs: number) => {
+    window.setTimeout(() => {
+      if (
+        generation !== muteGeneration ||
+        !enabled ||
+        !lastPlaying ||
+        lastSpotifyUri !== expectedUri
+      ) {
+        return;
+      }
+
+      void automaticallyMuteSpotifyWebPlayer(reason);
+    }, delayMs);
+  };
+
+  // The Web Player needs a moment to become the active Connect device after
+  // navigation. Try twice without polling the Spotify API continuously.
+  attempt(2_500);
+  attempt(5_500);
+}
+
 async function mirrorTrackInWebPlayer(track: SpotifyTrack, positionMs: number) {
   return playSpotifyWebTrack(track.uri, positionMs);
 }
@@ -452,6 +607,8 @@ async function syncOnce() {
         spotifyTrack: currentResolvedTrack,
       });
 
+      scheduleAutomaticSpotifyMute('track-start');
+
       return;
     }
 
@@ -487,6 +644,9 @@ async function syncOnce() {
           ciderArtist: cider.artist,
           spotifyTrack: currentResolvedTrack,
         });
+        if (started) {
+          scheduleAutomaticSpotifyMute('resume');
+        }
       } else {
         pauseSpotifyWebPlayer();
         lastPlaying = false;
@@ -671,6 +831,10 @@ export function startBridge() {
 }
 
 export function stopBridge() {
+  muteGeneration++;
+  spotifyAccessToken = '';
+  spotifyAccessTokenExpiresAt = 0;
+
   if (timer) window.clearInterval(timer);
   timer = 0;
   removePlaybackEventListeners();
@@ -712,6 +876,14 @@ export function handleOAuthMessage(data: any) {
   lastObservedAt = 0;
 
   loginWindowOpened = false;
+
+  spotifyAccessToken = String(data.accessToken);
+  spotifyAccessTokenExpiresAt =
+    Number(data.tokenExpMs) || Date.now() + 3_300_000;
+
+  deviceVolumeControlUnavailableUntil = 0;
+  lastDeviceMuteTrack = '';
+  lastDeviceMuteAt = 0;
 
   startSpotifyWebPlayerSession();
 

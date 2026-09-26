@@ -5,7 +5,7 @@ export default {
   description: "Shows Spotify Canvas with Apple-artwork detection, animated transitions, and immersive One placement.",
   version: "2.8.0",
   author: "palabok13418",
-  repo: "https://github.com/ciderapp/plugin-template",
+  repo: "https://github.com/palabok13418/Spotify-Canvas-for-Cider",
   pluginKitVersion: "4",
   SettingsElement: "canvascider-settings",
   icon: "logo.png",

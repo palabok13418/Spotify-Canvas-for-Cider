@@ -121,6 +121,7 @@ export function ensureSpotifyWebPlayer() {
     });
 
     concealWindow();
+    window.setTimeout(() => muteSpotifyWebPlayer(), 1500);
 
     log('Spotify Web Player background session opened', {
       concealed: true,
@@ -139,6 +140,67 @@ export function startSpotifyWebPlayerSession() {
   return Boolean(ensureSpotifyWebPlayer());
 }
 
+export function muteSpotifyWebPlayer() {
+  clearWindowReference();
+
+  if (!playerWindow || playerWindow.closed) {
+    warn('cannot mute Spotify Web Player because the background window is unavailable');
+    return false;
+  }
+
+  let attempted = false;
+
+  try {
+    // Best-effort: ask the Spotify page whether it handles a bridge message.
+    // The page remains cross-origin, so this is intentionally non-invasive.
+    playerWindow.postMessage(
+      { type: 'cider-spotify-mute-request', key: 'm' },
+      'https://open.spotify.com',
+    );
+    attempted = true;
+  } catch (error) {
+    warn('Spotify Web Player rejected the mute message', error);
+  }
+
+  try {
+    // Some Chromium hosts permit focus/keyboard routing to a popup opened by
+    // the current page. This does not access Spotify's DOM and is harmless if
+    // the host ignores synthetic keyboard events.
+    playerWindow.focus?.();
+    playerWindow.dispatchEvent(
+      new KeyboardEvent('keydown', {
+        key: 'm',
+        code: 'KeyM',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    playerWindow.dispatchEvent(
+      new KeyboardEvent('keyup', {
+        key: 'm',
+        code: 'KeyM',
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    attempted = true;
+  } catch (error) {
+    warn('Spotify Web Player keyboard mute attempt was blocked by the browser', error);
+  } finally {
+    try {
+      playerWindow.blur?.();
+      window.focus?.();
+    } catch {}
+  }
+
+  log('requested Spotify Web Player mute', {
+    attempted,
+    note: 'cross-origin browser security may prevent the page from accepting the synthetic M shortcut',
+  });
+
+  return attempted;
+}
+
 export function playSpotifyWebTrack(uri: string, positionMs = 0) {
   const trackId = trackIdFromUri(uri);
   if (!trackId) {
@@ -155,6 +217,7 @@ export function playSpotifyWebTrack(uri: string, positionMs = 0) {
   try {
     win.location.href = trackUrl(trackId);
     concealWindow();
+    window.setTimeout(() => muteSpotifyWebPlayer(), 1800);
 
     log('Spotify Web Player navigated to track', {
       trackId,

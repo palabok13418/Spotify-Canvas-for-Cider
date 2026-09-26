@@ -130,6 +130,72 @@ export async function muteSpotifyDevice(accessToken: string, deviceId: string) {
   );
 }
 
+export interface SpotifyPlaybackState {
+  deviceId: string;
+  deviceName: string;
+  deviceType: string;
+  isPlaying: boolean;
+  progressMs: number | null;
+  timestampMs: number | null;
+  trackUri: string | null;
+  durationMs: number | null;
+}
+
+export async function getSpotifyPlaybackState(accessToken: string): Promise<SpotifyPlaybackState | null> {
+  const result = await spotifyApi<{
+    ok: boolean;
+    data?: {
+      device?: {
+        id?: string | null;
+        name?: string | null;
+        type?: string | null;
+      } | null;
+      is_playing?: boolean;
+      progress_ms?: number | null;
+      timestamp?: number | null;
+      item?: {
+        uri?: string | null;
+        duration_ms?: number | null;
+      } | null;
+    };
+  }>(accessToken, '/me/player');
+
+  if (!result?.ok || !result.data?.device?.id) return null;
+
+  return {
+    deviceId: String(result.data.device.id),
+    deviceName: String(result.data.device.name || 'Spotify device'),
+    deviceType: String(result.data.device.type || 'Unknown'),
+    isPlaying: Boolean(result.data.is_playing),
+    progressMs: Number.isFinite(Number(result.data.progress_ms))
+      ? Number(result.data.progress_ms)
+      : null,
+    timestampMs: Number.isFinite(Number(result.data.timestamp))
+      ? Number(result.data.timestamp)
+      : null,
+    trackUri: result.data.item?.uri ? String(result.data.item.uri) : null,
+    durationMs: Number.isFinite(Number(result.data.item?.duration_ms))
+      ? Number(result.data.item?.duration_ms)
+      : null,
+  };
+}
+
+export async function seekSpotifyPlayback(
+  accessToken: string,
+  positionMs: number,
+  deviceId?: string,
+) {
+  const suffix = new URLSearchParams();
+  suffix.set('position_ms', String(Math.max(0, Math.floor(positionMs))));
+  if (deviceId) suffix.set('device_id', deviceId);
+
+  return spotifyApi(
+    accessToken,
+    `/me/player/seek?${suffix.toString()}`,
+    'PUT',
+  );
+}
+
 export async function muteActiveSpotifyComputer(accessToken: string): Promise<SpotifyDevice | null> {
   const devices = await listDevices(accessToken);
 

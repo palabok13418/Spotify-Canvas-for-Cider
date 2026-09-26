@@ -1,7 +1,7 @@
 import { clearAuth, loadAuth, saveAuth } from './storage';
 import { listDevices, pausePlayback, playTrack, probeSpotifyProfile, refreshSpotifyToken, resolveSpotifyTrack, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
-export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
+export type BridgeStatus = 'disabled' | 'link-required' | 'linked' | 'spotify-required' | 'ready' | 'syncing' | 'error';
 
 export interface BridgeSnapshot {
   status: BridgeStatus;
@@ -44,6 +44,8 @@ let lastCapabilityProbeAt = 0;
 let capabilityProbeInFlight: Promise<{ ok: boolean; id?: string | null; status?: number; message?: string }> | null = null;
 let lastLoggedCiderKey = '';
 let lastLoggedStatus = '';
+let playerAccessDenied = false;
+let playbackScopesMissing = false;
 
 const RUNTIME_KEY = '__CIDER_SPOTIFY_NOTES_BRIDGE_RUNTIME__';
 const runtimeOwner = {};
@@ -89,6 +91,8 @@ export function setEnabled(value: boolean) {
 
   if (value) {
     controlBlockedUntil = 0;
+    playerAccessDenied = false;
+    playbackScopesMissing = false;
     promptSpotifyLogin();
     emit(
       loadAuth()
@@ -153,21 +157,12 @@ async function ensureToken() {
   const grantedScopes = new Set(grantedScope.split(/\s+/).filter(Boolean));
   const missingScopes = REQUIRED_SPOTIFY_SCOPES.filter((scope) => !grantedScopes.has(scope));
 
-  if (grantedScope && missingScopes.length) {
-    clearAuth();
-    accessToken = '';
-    tokenExpMs = 0;
-    refreshToken = '';
-    const scopeError: any = new Error('Spotify OAuth token is missing required playback scopes.');
-    scopeError.status = 401;
-    scopeError.code = 'MISSING_SPOTIFY_SCOPES';
-    scopeError.detail = missingScopes.join(', ');
-    warn('stored Spotify OAuth token is missing required scopes; forcing a fresh login', {
+  playbackScopesMissing = Boolean(grantedScope && missingScopes.length);
+  if (playbackScopesMissing) {
+    warn('Spotify login is still valid, but the saved authorization is missing playback scopes', {
       grantedScope,
       missingScopes,
     });
-    promptSpotifyLogin();
-    throw scopeError;
   }
 
   accessToken = token.accessToken;
@@ -410,7 +405,19 @@ async function getPhone(force = false): Promise<SpotifyDevice | null> {
     return phoneDevice;
   }
 
+  if (playbackScopesMissing || playerAccessDenied) {
+    phoneDevice = null;
+    phoneCheckedAt = now;
+    return null;
+  }
+
   const token = await ensureToken();
+
+  if (playbackScopesMissing || playerAccessDenied) {
+    phoneDevice = null;
+    phoneCheckedAt = now;
+    return null;
+  }
   log('requesting Spotify Connect devices');
 
   let devices: SpotifyDevice[];
@@ -421,6 +428,7 @@ async function getPhone(force = false): Promise<SpotifyDevice | null> {
     phoneCheckedAt = now;
 
     if (Number(error?.status) === 403) {
+      playerAccessDenied = true;
       const shouldProbe = now - lastCapabilityProbeAt >= 60_000;
       if (shouldProbe) {
         lastCapabilityProbeAt = now;
@@ -634,7 +642,7 @@ async function syncOnce() {
       if (!phone) {
         emit({
           status: 'spotify-required',
-          message: 'Open Spotify on your phone so it appears as a playback device.',
+          message: getPlaybackAvailabilityMessage(),
           ciderTitle: cider.title,
           ciderArtist: cider.artist,
           spotifyTrack: currentResolvedTrack
@@ -689,7 +697,7 @@ async function syncOnce() {
       if (!phone) {
         emit({
           status: 'spotify-required',
-          message: 'Open Spotify on your phone so it appears as a playback device.',
+          message: getPlaybackAvailabilityMessage(),
           ciderTitle: cider.title,
           ciderArtist: cider.artist,
           spotifyTrack: currentResolvedTrack
@@ -761,7 +769,7 @@ async function syncOnce() {
         status: phoneDevice ? 'ready' : 'spotify-required',
         message: phoneDevice
           ? `Mirroring to ${phoneDevice.name}.`
-          : 'Open Spotify on your phone so it appears as a playback device.',
+          : getPlaybackAvailabilityMessage(),
         ciderTitle: cider.title,
         ciderArtist: cider.artist,
         spotifyTrack: currentResolvedTrack,
@@ -798,6 +806,10 @@ async function syncOnce() {
         ciderArtist: cider.artist
       });
     } else if (status === 403) {
+      if (endpoint.startsWith('/me/player/') || error?.spotifyPlayerAccessDenied || error?.spotifyAppAccessDenied) {
+        playerAccessDenied = true;
+      }
+
       // 403 from the Spotify Player API is an authorization/entitlement
       // problem, not a transient token-expiry condition. Use exponential
       // backoff so polling/event bursts cannot hammer the API.
@@ -821,7 +833,7 @@ async function syncOnce() {
       }
 
       emit({
-        status: 'error',
+        status: 'spotify-required',
         message,
         ciderTitle: cider.title,
         ciderArtist: cider.artist
@@ -988,23 +1000,16 @@ export function handleOAuthMessage(data: any) {
     tokenExpMs: Number(data.tokenExpMs) || null,
   });
 
-  if (missingCallbackScopes.length) {
-    clearAuth();
-    accessToken = '';
-    tokenExpMs = 0;
-    refreshToken = '';
-    loginWindowOpened = false;
-
-    emit({
-      status: 'link-required',
-      message: `Spotify login did not grant the required playback permissions: ${missingCallbackScopes.join(', ')}.`,
-    });
-
-    warn('Spotify OAuth callback is missing required playback scopes', {
-      grantedScope: callbackScope,
+  // OAuth success is independent from Spotify Player API eligibility.
+  // Keep the authenticated session even when Spotify returns an authorization
+  // without the playback scopes, so a Premium/allowlist/API restriction is
+  // never misreported as a failed login.
+  playbackScopesMissing = Boolean(missingCallbackScopes.length);
+  if (playbackScopesMissing) {
+    warn('Spotify OAuth succeeded but playback scopes were not granted', {
+      grantedScope: callbackScope || null,
       missingScopes: missingCallbackScopes,
     });
-    return false;
   }
 
   accessToken = String(data.accessToken);
@@ -1021,6 +1026,7 @@ export function handleOAuthMessage(data: any) {
 
   controlBlockedUntil = 0;
   controlBackoffMs = 15_000;
+  playerAccessDenied = false;
   lastCapabilityProbeAt = 0;
   capabilityProbeInFlight = null;
   phoneDevice = null;
@@ -1037,12 +1043,26 @@ export function handleOAuthMessage(data: any) {
   loginWindowOpened = false;
 
   emit({
-    status: 'ready',
-    message: 'Spotify linked. Waiting for your current Cider track.'
+    status: 'linked',
+    message: playbackScopesMissing
+      ? 'Spotify login succeeded. Playback permissions are unavailable for this authorization.'
+      : 'Spotify login succeeded. Checking Spotify playback access…'
   });
 
   void syncOnce();
   return true;
+}
+
+function getPlaybackAvailabilityMessage() {
+  if (playbackScopesMissing) {
+    return 'Spotify is logged in, but this authorization does not include the playback permissions needed for phone mirroring.';
+  }
+
+  if (playerAccessDenied) {
+    return 'Spotify is logged in, but Spotify Player API access is unavailable for this account or app.';
+  }
+
+  return 'Open Spotify on your phone so it appears as a playback device.';
 }
 
 function formatTime(milliseconds: number) {

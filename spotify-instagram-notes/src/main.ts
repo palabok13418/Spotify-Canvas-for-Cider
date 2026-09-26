@@ -7,7 +7,7 @@ import {
 } from './pluginkit';
 import SpotifyNotesPanel from './components/SpotifyNotesPanel.vue';
 import PluginConfig from './plugin.config';
-import { handleOAuthMessage, startBridge } from './lib/sync';
+import { handleOAuthMessage, isEnabled, setEnabled, startBridge } from './lib/sync';
 import { MUS_API_BASE, openSpotifyAuth } from './lib/musApi';
 
 const PanelElement = defineCustomElement(SpotifyNotesPanel, { shadowRoot: false });
@@ -23,21 +23,46 @@ function openPanel(customElementName: (name: string) => string) {
   openDialog();
 }
 
-function openSpotifyLogin() {
-  const origin = window.location.origin === 'null'
-    ? '*'
-    : window.location.origin;
+function toggleMirroring() {
+  const next = !isEnabled();
+  setEnabled(next);
 
-  const url = openSpotifyAuth(origin);
-  const popup = window.open(
-    url,
-    'musapi-spotify-auth',
-    'width=520,height=760,resizable=yes,scrollbars=yes',
+  const button = findSpotifyMirroringButton();
+  if (button) {
+    button.textContent = next ? 'Pause mirroring' : 'Resume mirroring';
+  }
+}
+
+function findSpotifyMirroringButton(): HTMLElement | null {
+  const selectors = [
+    'button[title="Pause mirroring"]',
+    'button[title="Resume mirroring"]',
+    '[role="button"][title="Pause mirroring"]',
+    '[role="button"][title="Resume mirroring"]',
+  ];
+
+  for (const selector of selectors) {
+    const element = document.querySelector<HTMLElement>(selector);
+    if (element) return element;
+  }
+
+  const candidates = Array.from(
+    document.querySelectorAll<HTMLElement>('button,[role="button"]'),
   );
 
-  if (!popup) {
-    window.location.href = url;
-  }
+  return candidates.find((element) => {
+    const label = [
+      element.getAttribute('title'),
+      element.getAttribute('aria-label'),
+      element.textContent,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .trim()
+      .toLowerCase();
+
+    return label === 'pause mirroring' || label === 'resume mirroring';
+  }) ?? null;
 }
 
 function findNotificationButton(): HTMLElement | null {
@@ -126,7 +151,7 @@ function moveSpotifyLoginBeforeNotifications() {
   return true;
 }
 
-function registerSpotifyLoginButton() {
+function registerSpotifyMirroringButton() {
   let registered = false;
   let attempts = 0;
 
@@ -134,22 +159,23 @@ function registerSpotifyLoginButton() {
     if (registered) return;
 
     const pluginSys = (globalThis as any).__PLUGINSYS__;
+
     if (!pluginSys?.Components?.CustomButtons?.addCustomButton) {
       return;
     }
 
     try {
       addCustomButton({
-        element: 'Log in',
+        element: isEnabled() ? 'Pause mirroring' : 'Resume mirroring',
         location: 'chrome-top/right',
-        title: 'Log in to Spotify',
+        title: isEnabled() ? 'Pause mirroring' : 'Resume mirroring',
         menuElement: customElementName('spotify-notes-panel'),
-        onClick: () => openSpotifyLogin(),
+        onClick: () => toggleMirroring(),
       });
 
       registered = true;
-      console.log('[Spotify Notes Bridge] login button registered');
-      moveSpotifyLoginBeforeNotifications();
+      console.log('[Spotify Notes Bridge] mirroring button registered');
+      moveSpotifyMirroringButtonBeforeNotifications();
     } catch (error) {
       console.warn('[Spotify Notes Bridge] waiting for Cider CustomButtons API', error);
     }
@@ -166,14 +192,14 @@ function registerSpotifyLoginButton() {
       attempts += 1;
       if (attempts >= 80) {
         window.clearInterval(registerTimer);
-        console.warn('[Spotify Notes Bridge] could not register login button');
+        console.warn('[Spotify Notes Bridge] could not register mirroring button');
       }
     }
   }, 250);
 
   const observer = new MutationObserver(() => {
     if (registered) {
-      moveSpotifyLoginBeforeNotifications();
+      moveSpotifyMirroringButtonBeforeNotifications();
     }
   });
 
@@ -183,7 +209,27 @@ function registerSpotifyLoginButton() {
   });
 
   window.setTimeout(() => observer.disconnect(), 30000);
+}
 
+function moveSpotifyMirroringButtonBeforeNotifications() {
+  const mirroringButton = findSpotifyMirroringButton();
+  const notificationButton = findNotificationButton();
+
+  if (!mirroringButton || !notificationButton) return false;
+  if (mirroringButton === notificationButton) return true;
+
+  const parent = notificationButton.parentElement;
+  if (!parent) return false;
+
+  if (mirroringButton.parentElement === parent) {
+    if (mirroringButton.nextElementSibling !== notificationButton) {
+      parent.insertBefore(mirroringButton, notificationButton);
+    }
+    return true;
+  }
+
+  parent.insertBefore(mirroringButton, notificationButton);
+  return true;
 }
 
 const { plugin, customElementName } = definePluginContext({
@@ -202,7 +248,7 @@ const { plugin, customElementName } = definePluginContext({
       onClick: () => openPanel(customElementName),
     });
 
-    registerSpotifyLoginButton();
+    registerSpotifyMirroringButton();
 
     const musApiOrigin = new URL(MUS_API_BASE).origin;
 

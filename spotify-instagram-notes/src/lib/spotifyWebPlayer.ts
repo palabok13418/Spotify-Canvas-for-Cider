@@ -22,11 +22,11 @@ function trackIdFromUri(uri: string) {
 }
 
 function trackUrl(trackId: string) {
-  // Spotify's regular Web Player track URL is the only public page used here.
-  // A fresh cache-buster prevents Cider/WebView from reusing the previous track
-  // document when the same route is requested repeatedly.
+  // Use Spotify's normal Web Player track URL with a share token. Current
+  // Spotify Web Player behavior can autoplay a track opened this way when the
+  // authenticated Web Player session is already active.
   const url = new URL(`/track/${encodeURIComponent(trackId)}`, BASE_URL);
-  url.searchParams.set('cider_bridge', Date.now().toString(36));
+  url.searchParams.set('si', crypto.randomUUID());
   return url.toString();
 }
 

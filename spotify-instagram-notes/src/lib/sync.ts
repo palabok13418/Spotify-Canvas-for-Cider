@@ -1,4 +1,4 @@
-import { clearAuth, loadAuth, saveAuth } from './storage';
+import { loadAuth, saveAuth } from './storage';
 import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, resolveSpotifyTrack, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
 export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
@@ -36,6 +36,26 @@ let lastMatchAttemptAt = 0;
 let busy = false;
 let timer = 0;
 let loginWindowOpened = false;
+let controlBlockedUntil = 0;
+let lastLoggedCiderKey = '';
+let lastLoggedStatus = '';
+
+const PREFIX = '[Spotify Notes Bridge]';
+
+function log(message: string, details?: unknown) {
+  if (details === undefined) console.info(PREFIX, message);
+  else console.info(PREFIX, message, details);
+}
+
+function warn(message: string, details?: unknown) {
+  if (details === undefined) console.warn(PREFIX, message);
+  else console.warn(PREFIX, message, details);
+}
+
+function errorLog(message: string, details?: unknown) {
+  if (details === undefined) console.error(PREFIX, message);
+  else console.error(PREFIX, message, details);
+}
 
 let currentSnapshot: BridgeSnapshot = {
   status: 'link-required',
@@ -74,6 +94,18 @@ export function isEnabled() {
 
 function emit(snapshot: BridgeSnapshot) {
   currentSnapshot = snapshot;
+
+  const statusKey = `${snapshot.status}|${snapshot.message}`;
+  if (statusKey !== lastLoggedStatus) {
+    lastLoggedStatus = statusKey;
+    log('status', {
+      status: snapshot.status,
+      message: snapshot.message,
+      ciderTitle: snapshot.ciderTitle || null,
+      ciderArtist: snapshot.ciderArtist || null,
+      phone: snapshot.phoneDevice?.name || null,
+    });
+  }
   for (const listener of listeners) {
     try {
       listener(snapshot);
@@ -82,12 +114,18 @@ function emit(snapshot: BridgeSnapshot) {
 }
 
 async function ensureToken() {
-  if (accessToken && tokenExpMs > Date.now() + 30_000) return accessToken;
+  if (accessToken && tokenExpMs > Date.now() + 30_000) {
+    return accessToken;
+  }
 
   const stored = loadAuth();
-  if (!stored?.refreshToken) throw new Error('Spotify is not linked');
+  if (!stored?.refreshToken) {
+    warn('no stored Spotify OAuth refresh token');
+    throw new Error('Spotify is not linked');
+  }
 
   refreshToken = stored.refreshToken;
+  log('refreshing Spotify OAuth access token');
   const token = await refreshSpotifyToken(refreshToken);
 
   accessToken = token.accessToken;
@@ -100,15 +138,32 @@ async function ensureToken() {
     savedAt: Date.now()
   });
 
+  log('Spotify OAuth token ready', {
+    scope: token.scope || stored.scope || null,
+    expiresInSeconds: Math.max(0, Math.floor((tokenExpMs - Date.now()) / 1000)),
+  });
+
   return accessToken;
 }
 
 function getCiderTrack() {
   const store = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore;
-  if (!store) return null;
+  if (!store) {
+    if (lastLoggedStatus !== 'no-store') {
+      lastLoggedStatus = 'no-store';
+      warn('Cider appleMusicStore is not available yet');
+    }
+    return null;
+  }
 
   const item = store.nowPlayingItem ?? null;
-  if (!item) return null;
+  if (!item) {
+    if (lastLoggedStatus !== 'no-now-playing') {
+      lastLoggedStatus = 'no-now-playing';
+      log('Cider has no now-playing item yet');
+    }
+    return null;
+  }
 
   const attrs = item.attributes ?? item;
 
@@ -166,7 +221,13 @@ function getCiderTrack() {
         ? !store.audioElement.paused
         : false;
 
-  if (!title || !artist) return null;
+  if (!title || !artist) {
+    warn('Cider now-playing item exists but title/artist could not be read', {
+      hasAttributes: Boolean(item.attributes),
+      rawId: item.id || item.playParams?.id || null,
+    });
+    return null;
+  }
 
   const key = [
     id,
@@ -176,7 +237,7 @@ function getCiderTrack() {
     durationMs || 0
   ].map((value) => String(value).trim().toLowerCase()).join('|');
 
-  return {
+  const track = {
     key,
     title,
     artist,
@@ -187,6 +248,22 @@ function getCiderTrack() {
     positionMs,
     playing
   };
+
+  if (track.key !== lastLoggedCiderKey) {
+    lastLoggedCiderKey = track.key;
+    log('Cider track detected', {
+      title: track.title,
+      artist: track.artist,
+      album: track.album || null,
+      isrc: track.isrc || null,
+      durationMs: track.durationMs || null,
+      positionMs: track.positionMs,
+      playing: track.playing,
+      id: track.id || null,
+    });
+  }
+
+  return track;
 }
 
 function readPositionMs(store: any, item: any, attrs: any) {
@@ -227,13 +304,45 @@ async function findSpotifyTrack(cider: {
   // Mus-API is the only track-resolution path. It can use the same
   // stronger matcher as the working Canvas resolver when its local
   // BitChord matcher cannot confidently identify the track.
-  return resolveSpotifyTrack({
+  log('resolving Cider track through Mus-API', {
     title: cider.title,
     artist: cider.artist,
-    album: cider.album,
-    durationMs: cider.durationMs,
-    isrc: cider.isrc,
-  }).catch(() => null);
+    album: cider.album || null,
+    durationMs: cider.durationMs || null,
+    isrc: cider.isrc || null,
+  });
+
+  try {
+    const result = await resolveSpotifyTrack({
+      title: cider.title,
+      artist: cider.artist,
+      album: cider.album,
+      durationMs: cider.durationMs,
+      isrc: cider.isrc,
+    });
+
+    if (result) {
+      log('Spotify track resolved', {
+        id: result.id,
+        uri: result.uri,
+        name: result.name,
+        artists: result.artists,
+        album: result.album || null,
+        durationMs: result.durationMs || null,
+      });
+    } else {
+      warn('Mus-API returned no Spotify track match');
+    }
+
+    return result;
+  } catch (err: any) {
+    warn('Mus-API track resolution failed', {
+      status: err?.status || null,
+      message: String(err?.message || err || 'unknown error'),
+      detail: err?.detail || null,
+    });
+    return null;
+  }
 }
 async function getPhone(force = false): Promise<SpotifyDevice | null> {
   const now = Date.now();
@@ -243,7 +352,20 @@ async function getPhone(force = false): Promise<SpotifyDevice | null> {
   }
 
   const token = await ensureToken();
+  log('requesting Spotify Connect devices');
+
   const devices = await listDevices(token);
+
+  log('Spotify Connect devices received', {
+    count: devices.length,
+    devices: devices.map((device) => ({
+      id: device.id,
+      name: device.name,
+      type: device.type,
+      active: device.isActive,
+      restricted: device.isRestricted,
+    })),
+  });
 
   const phones = devices.filter(
     (device) =>
@@ -257,6 +379,19 @@ async function getPhone(force = false): Promise<SpotifyDevice | null> {
     null;
 
   phoneCheckedAt = now;
+
+  log('phone device selection', {
+    selected: phoneDevice
+      ? {
+          id: phoneDevice.id,
+          name: phoneDevice.name,
+          type: phoneDevice.type,
+          active: phoneDevice.isActive,
+          restricted: phoneDevice.isRestricted,
+        }
+      : null,
+  });
+
   return phoneDevice;
 }
 
@@ -277,10 +412,24 @@ async function seekOnPhone(positionMs: number) {
 async function playResolvedOnPhone(token: string, track: SpotifyTrack, positionMs: number) {
   let phone = await getPhone();
 
-  if (!phone) return null;
+  if (!phone) {
+    warn('no smartphone Spotify device is available');
+    return null;
+  }
+
+  log('sending playback command to phone', {
+    phone: phone.name,
+    deviceId: phone.id,
+    uri: track.uri,
+    positionMs,
+  });
 
   try {
     await playTrack(token, phone.id, track.uri, positionMs);
+    log('phone playback command succeeded', {
+      phone: phone.name,
+      uri: track.uri,
+    });
   } catch (error: any) {
     if (Number(error?.status) !== 404 && Number(error?.status) !== 502) {
       throw error;
@@ -289,7 +438,16 @@ async function playResolvedOnPhone(token: string, track: SpotifyTrack, positionM
     phone = await getPhone(true);
     if (!phone) return null;
 
+    log('retrying playback command after stale device response', {
+      phone: phone.name,
+      deviceId: phone.id,
+    });
+
     await playTrack(token, phone.id, track.uri, positionMs);
+    log('phone playback retry succeeded', {
+      phone: phone.name,
+      uri: track.uri,
+    });
   }
 
   phoneDevice = phone;
@@ -299,6 +457,8 @@ async function playResolvedOnPhone(token: string, track: SpotifyTrack, positionM
 
 async function syncOnce() {
   if (!enabled || busy) return;
+
+  if (Date.now() < controlBlockedUntil) return;
 
   const cider = getCiderTrack();
   if (!cider) return;
@@ -520,11 +680,26 @@ async function syncOnce() {
   } catch (error: any) {
     const status = Number(error?.status || 0);
     const message = String(error?.message || error || 'Spotify bridge error');
+    const detail = String(error?.detail || '').trim();
+    const endpoint = String(error?.spotifyPath || '').trim();
 
-    accessToken = '';
-    tokenExpMs = 0;
+    errorLog('sync operation failed', {
+      status,
+      message,
+      detail: detail || null,
+      endpoint: endpoint || null,
+      cider: {
+        title: cider.title,
+        artist: cider.artist,
+        album: cider.album || null,
+        playing: cider.playing,
+      },
+    });
 
     if (status === 401) {
+      accessToken = '';
+      tokenExpMs = 0;
+      controlBlockedUntil = 0;
       emit({
         status: 'link-required',
         message: 'Spotify authorization expired. Relink Spotify through Mus-API.',
@@ -532,9 +707,21 @@ async function syncOnce() {
         ciderArtist: cider.artist
       });
     } else if (status === 403) {
+      // A 403 does not mean the OAuth token is expired. Keep it and back off
+      // briefly so we don't refresh the same valid token over and over.
+      controlBlockedUntil = Date.now() + 15_000;
+
+      if (cider.key === lastCiderKey) {
+        lastCiderKey = '';
+        lastSpotifyUri = '';
+        currentResolvedTrack = null;
+      }
+
       emit({
         status: 'error',
-        message: 'Spotify rejected playback control. Check the Spotify account/device permissions.',
+        message: endpoint
+          ? `Spotify rejected ${endpoint} with HTTP 403.`
+          : 'Spotify rejected the playback request with HTTP 403.',
         ciderTitle: cider.title,
         ciderArtist: cider.artist
       });
@@ -561,6 +748,8 @@ async function syncOnce() {
 
 export function promptSpotifyLogin() {
   if (!enabled || loadAuth() || loginWindowOpened) return false;
+
+  log('opening Spotify OAuth login popup through Mus-API');
 
   loginWindowOpened = true;
   const origin = window.location.origin === 'null' ? '*' : window.location.origin;
@@ -593,10 +782,22 @@ export function promptSpotifyLogin() {
 }
 
 export function startBridge() {
-  if (timer) return;
+  if (timer) {
+    log('startBridge() ignored because bridge is already running');
+    return;
+  }
+
+  log('bridge starting', {
+    enabled,
+    hasStoredAuth: Boolean(loadAuth()),
+    musApiBase: MUS_API_BASE,
+    syncIntervalMs: 1200,
+  });
 
   if (!loadAuth()) {
     promptSpotifyLogin();
+  } else {
+    log('stored Spotify OAuth refresh token found');
   }
 
   timer = window.setInterval(() => {
@@ -611,7 +812,16 @@ export function stopBridge() {
 }
 
 export function handleOAuthMessage(data: any) {
-  if (!data?.ok || !data.accessToken) return false;
+  if (!data?.ok || !data.accessToken) {
+    warn('received an invalid Spotify OAuth callback payload');
+    return false;
+  }
+
+  log('Spotify OAuth callback received', {
+    scope: data.scope || null,
+    hasRefreshToken: Boolean(data.refreshToken),
+    tokenExpMs: Number(data.tokenExpMs) || null,
+  });
 
   accessToken = String(data.accessToken);
   tokenExpMs = Number(data.tokenExpMs) || Date.now() + 3_300_000;
@@ -625,6 +835,7 @@ export function handleOAuthMessage(data: any) {
     });
   }
 
+  controlBlockedUntil = 0;
   phoneDevice = null;
   phoneCheckedAt = 0;
   lastCiderKey = '';

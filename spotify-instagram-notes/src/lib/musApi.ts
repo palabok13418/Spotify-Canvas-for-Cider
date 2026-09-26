@@ -96,7 +96,7 @@ export async function searchTracks(accessToken: string, query: string): Promise<
     id: String(item.id || ''),
     uri: String(item.uri || ''),
     name: String(item.name || ''),
-    artists: Array.isArray(item.artists) ? item.artists.map((a) => String(a?.name || '')).filter(Boolean) : [],
+    artists: Array.isArray(item.artists) ? item.artists.map((a: any) => String(a?.name || '')).filter(Boolean) : [],
     album: String(item.album?.name || ''),
     durationMs: Number(item.duration_ms) || undefined,
   })).filter((track) => track.uri);

@@ -1,5 +1,5 @@
 import { clearAuth, loadAuth, saveAuth } from './storage';
-import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, searchTracks, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
+import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, resolveSpotifyTrack, searchTracks, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
 export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
 
@@ -217,62 +217,6 @@ function toMs(value: unknown) {
   return Number.isFinite(number) && number > 0 ? Math.floor(number) : 0;
 }
 
-function normalize(value: string) {
-  return String(value || '')
-    .normalize('NFKD')
-    .replace(/\p{Diacritic}/gu, '')
-    .toLowerCase()
-    .replace(/&/g, 'and')
-    .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
-    .replace(/\b(feat\.?|ft\.?)\b.*$/g, ' ')
-    .replace(/[^a-z0-9]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-function scoreTrack(
-  candidate: SpotifyTrack,
-  cider: { title: string; artist: string; album: string; durationMs: number }
-) {
-  const wantedTitle = normalize(cider.title);
-  const wantedArtist = normalize(cider.artist);
-  const wantedAlbum = normalize(cider.album);
-
-  const candidateTitle = normalize(candidate.name);
-  const candidateArtist = normalize(
-    candidate.artists[0] || candidate.artists.join(', ')
-  );
-  const candidateAlbum = normalize(candidate.album);
-
-  let score = 0;
-
-  if (wantedTitle && candidateTitle === wantedTitle) score += 55;
-  else if (
-    wantedTitle &&
-    (candidateTitle.includes(wantedTitle) || wantedTitle.includes(candidateTitle))
-  ) score += 35;
-
-  if (wantedArtist && candidateArtist === wantedArtist) score += 35;
-  else if (
-    wantedArtist &&
-    (candidateArtist.includes(wantedArtist) || wantedArtist.includes(candidateArtist))
-  ) score += 20;
-
-  if (wantedAlbum && candidateAlbum === wantedAlbum) score += 8;
-  else if (
-    wantedAlbum &&
-    (candidateAlbum.includes(wantedAlbum) || wantedAlbum.includes(candidateAlbum))
-  ) score += 4;
-
-  if (cider.durationMs && candidate.durationMs) {
-    const delta = Math.abs(candidate.durationMs - cider.durationMs);
-    if (delta <= 1500) score += 7;
-    else if (delta <= 5000) score += 3;
-  }
-
-  return score;
-}
-
 async function findSpotifyTrack(
   token: string,
   cider: {
@@ -283,6 +227,21 @@ async function findSpotifyTrack(
     durationMs: number;
   }
 ) {
+  // Primary path: use the same Mus-API BitChord resolver that the
+  // working Canvas plugin uses. This gives both features one source
+  // of truth for Apple Music -> Spotify track matching.
+  const serverMatch = await resolveSpotifyTrack({
+    title: cider.title,
+    artist: cider.artist,
+    album: cider.album,
+    durationMs: cider.durationMs,
+    isrc: cider.isrc,
+  }).catch(() => null);
+
+  if (serverMatch) return serverMatch;
+
+  // Fallback: use the user's Spotify OAuth token directly if the
+  // server-side matcher is temporarily unavailable.
   const queries = [
     ...(cider.isrc ? [`isrc:${cider.isrc}`] : []),
     `track:"${cider.title.replace(/"/g, '')}" artist:"${cider.artist.replace(/"/g, '')}" album:"${cider.album.replace(/"/g, '')}"`,
@@ -306,11 +265,47 @@ async function findSpotifyTrack(
 
   if (!candidates.length) return null;
 
+  const normalize = (value: string) =>
+    String(value || '')
+      .normalize('NFKD')
+      .replace(/\p{Diacritic}/gu, '')
+      .toLowerCase()
+      .replace(/&/g, 'and')
+      .replace(/\([^)]*\)|\[[^\]]*\]/g, ' ')
+      .replace(/\b(feat\.?|ft\.?)\b.*$/g, ' ')
+      .replace(/[^a-z0-9]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+  const scoreTrack = (candidate: SpotifyTrack) => {
+    const wantedTitle = normalize(cider.title);
+    const wantedArtist = normalize(cider.artist);
+    const wantedAlbum = normalize(cider.album);
+    const candidateTitle = normalize(candidate.name);
+    const candidateArtist = normalize(candidate.artists[0] || candidate.artists.join(', '));
+    const candidateAlbum = normalize(candidate.album);
+
+    let score = 0;
+    if (wantedTitle && candidateTitle === wantedTitle) score += 55;
+    else if (wantedTitle && (candidateTitle.includes(wantedTitle) || wantedTitle.includes(candidateTitle))) score += 35;
+
+    if (wantedArtist && candidateArtist === wantedArtist) score += 35;
+    else if (wantedArtist && (candidateArtist.includes(wantedArtist) || wantedArtist.includes(candidateArtist))) score += 20;
+
+    if (wantedAlbum && candidateAlbum === wantedAlbum) score += 8;
+    else if (wantedAlbum && (candidateAlbum.includes(wantedAlbum) || wantedAlbum.includes(candidateAlbum))) score += 4;
+
+    if (cider.durationMs && candidate.durationMs) {
+      const delta = Math.abs(candidate.durationMs - cider.durationMs);
+      if (delta <= 1500) score += 7;
+      else if (delta <= 5000) score += 3;
+    }
+
+    return score;
+  };
+
   const ranked = candidates
-    .map((track) => ({
-      track,
-      score: scoreTrack(track, cider)
-    }))
+    .map((track) => ({ track, score: scoreTrack(track) }))
     .sort((a, b) => b.score - a.score);
 
   const best = ranked[0];

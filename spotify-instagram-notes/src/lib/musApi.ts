@@ -127,6 +127,7 @@ export async function resolveSpotifyTrack(input: {
   if (input.artist) url.searchParams.set('artist', input.artist);
   if (input.album) url.searchParams.set('album', input.album);
   if (input.durationMs) url.searchParams.set('durationMs', String(input.durationMs));
+  if (input.isrc) url.searchParams.set('isrc', input.isrc);
 
   const response = await fetch(url.toString(), {
     method: 'GET',

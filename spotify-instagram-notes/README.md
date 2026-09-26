@@ -1,29 +1,27 @@
 # Spotify Notes Bridge for Cider
 
-A Cider plugin that mirrors the song currently playing in Cider to Spotify so Spotify can expose the same listening state to features such as Instagram Notes.
+This folder is the finished Cider plugin that mirrors the track playing in Cider to the user's Spotify phone through Mus-API.
 
-## Flow
+## Runtime flow
 
-1. Link Spotify through Mus-API.
-2. Play a song in Cider.
-3. The plugin reads Cider's current Apple Music now-playing item through PluginKit.
-4. Mus-API's Spotify proxy searches Spotify using title, artist, album, and ISRC when available.
-5. The plugin scores the returned candidates and selects the closest matching track.
-6. Mus-API sends playback to the user's available Spotify smartphone device.
-7. Spotify becomes the source Instagram can use for its Notes music state.
+1. The user links Spotify from the plugin. OAuth is handled by Mus-API.
+2. Cider's Apple Music store supplies the current song details.
+3. The plugin resolves the same Spotify track through Mus-API's Spotify proxy/search layer. ISRC is tried when Cider exposes it, then title + artist + album matching is scored.
+4. Spotify's available devices are queried and only a `Smartphone` device is accepted.
+5. The plugin starts, pauses, resumes, and meaningfully seeks the matched Spotify track on the phone.
+6. Instagram is not automated. Spotify remains the source app for any listening-state integration that Instagram supports.
+
+## Microsoft Edge / Windows
+
+Cider's Windows desktop client uses Microsoft Edge WebView2. The plugin runs inside Cider's host webview and uses normal HTTPS requests to Mus-API. It does not scrape `open.spotify.com` and it does not require an undocumented native WebView2 API.
 
 ## Requirements
 
-- Cider with PluginKit v4 support.
-- A Spotify account authorized through Mus-API.
-- Spotify installed/open on the phone and visible as a Spotify playback device.
-- Mus-API's existing Spotify OAuth, refresh, search/proxy, and playback permissions configured on the deployed Mus-API instance.
-
-## Important behavior
-
-The plugin does not automate Instagram and does not access Instagram credentials. Instagram simply sees the user's normal Spotify playback state.
-
-The plugin uses Mus-API as the Spotify networking layer. Access and refresh tokens are not sent to Cider's local RPC server.
+- Cider with PluginKit v4.
+- The Mus-API Spotify OAuth/proxy endpoints must be configured.
+- Spotify must be installed and online on the phone.
+- The phone must appear in Spotify's device list as `Smartphone`.
+- Spotify playback control must be available for the account/device.
 
 ## Build
 
@@ -32,4 +30,13 @@ pnpm install
 pnpm build
 ```
 
-The generated `dist/plugin.js` is the plugin entry configured by `src/plugin.config.ts`.
+The Vite build outputs:
+
+- `dist/plugin.js`
+- `dist/plugin.yml`
+
+Cider loads `plugin.js` as an ES module entry from the manifest.
+
+## Security
+
+The plugin stores the OAuth refresh token locally for the Cider plugin. Short-lived access tokens are kept in memory/session state and sent only to Mus-API's Spotify proxy. The OAuth callback is accepted only from the configured Mus-API origin.

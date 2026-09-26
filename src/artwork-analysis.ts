@@ -6,7 +6,8 @@ export interface AppleArtworkAnalysis {
     | "apple-artwork-not-detected"
     | "probe-failed"
     | "not-similar"
-    | "insufficient-evidence";
+    | "insufficient-evidence"
+    | "motion-video";
   appleArtworkUrl?: string;
 }
 

@@ -3,6 +3,7 @@ const WINDOW_NAME = 'cider-spotify-notes-web-player';
 const BASE_URL = 'https://open.spotify.com';
 
 let playerWindow: Window | null = null;
+let concealTimer = 0;
 let currentTrackId = '';
 let currentPlaying = false;
 
@@ -30,9 +31,46 @@ function trackUrl(trackId: string) {
   return url.toString();
 }
 
+function concealWindow() {
+  clearWindowReference();
+
+  if (!playerWindow || playerWindow.closed) return;
+
+  try {
+    // Browsers only permit scripts to reposition/resize a window they opened.
+    // Keep the Web Player at the smallest practical size and outside the
+    // visible desktop so it does not become a second player surface.
+    playerWindow.resizeTo?.(1, 1);
+    playerWindow.moveTo?.(-32000, -32000);
+    playerWindow.blur?.();
+    window.focus?.();
+  } catch {}
+
+  // Some hosts restore popup bounds after navigation. Re-apply the concealment
+  // while the background player is alive.
+  if (!concealTimer) {
+    concealTimer = window.setInterval(() => {
+      if (!playerWindow || playerWindow.closed) {
+        window.clearInterval(concealTimer);
+        concealTimer = 0;
+        return;
+      }
+      try {
+        playerWindow.resizeTo?.(1, 1);
+        playerWindow.moveTo?.(-32000, -32000);
+        playerWindow.blur?.();
+      } catch {}
+    }, 750);
+  }
+}
+
 function clearWindowReference() {
   if (playerWindow && playerWindow.closed) {
     playerWindow = null;
+    if (concealTimer) {
+      window.clearInterval(concealTimer);
+      concealTimer = 0;
+    }
   }
 }
 
@@ -76,14 +114,19 @@ export function ensureSpotifyWebPlayer() {
       playerWindow = null;
       currentTrackId = '';
       currentPlaying = false;
+      if (concealTimer) {
+        window.clearInterval(concealTimer);
+        concealTimer = 0;
+      }
     });
 
-    try {
-      playerWindow.blur();
-      window.focus();
-    } catch {}
+    concealWindow();
 
-    log('Spotify Web Player background session opened');
+    log('Spotify Web Player background session opened', {
+      concealed: true,
+      size: '1x1',
+      position: 'off-screen',
+    });
     return playerWindow;
   } catch (error) {
     playerWindow = null;
@@ -111,10 +154,7 @@ export function playSpotifyWebTrack(uri: string, positionMs = 0) {
 
   try {
     win.location.href = trackUrl(trackId);
-    try {
-      win.blur();
-      window.focus();
-    } catch {}
+    concealWindow();
 
     log('Spotify Web Player navigated to track', {
       trackId,
@@ -141,6 +181,7 @@ export function pauseSpotifyWebPlayer() {
   // Navigating the background media page away from the track stops its media.
   try {
     playerWindow.location.href = 'about:blank';
+    concealWindow();
     currentPlaying = false;
     log('Spotify Web Player background session paused');
     return true;
@@ -160,6 +201,10 @@ export function stopSpotifyWebPlayerSession() {
   }
 
   playerWindow = null;
+  if (concealTimer) {
+    window.clearInterval(concealTimer);
+    concealTimer = 0;
+  }
   currentTrackId = '';
   currentPlaying = false;
   log('Spotify Web Player background session closed');

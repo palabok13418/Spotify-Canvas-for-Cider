@@ -2,7 +2,7 @@ import { defineCustomElement } from 'vue';
 import { addCustomButton, addMainMenuEntry, createModal, definePluginContext } from '@ciderapp/pluginkit';
 import SpotifyNotesPanel from './components/SpotifyNotesPanel.vue';
 import PluginConfig from './plugin.config';
-import { handleOAuthMessage } from './lib/sync';
+import { handleOAuthMessage, startBridge } from './lib/sync';
 
 const PanelElement = defineCustomElement(SpotifyNotesPanel, { shadowRoot: false });
 
@@ -40,6 +40,10 @@ const { plugin, customElementName } = definePluginContext({
     window.addEventListener('message', (event) => {
       if (event.data?.type === 'musaudio_spotify_oauth') handleOAuthMessage(event.data.data);
     });
+
+    // The bridge is intentionally started at plugin boot, not when the panel opens.
+    // That way a linked account mirrors playback without requiring the user to keep the UI open.
+    startBridge();
   },
 });
 

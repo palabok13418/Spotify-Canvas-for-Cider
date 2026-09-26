@@ -33,8 +33,20 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   });
   const data = await response.json().catch(() => null);
   if (!response.ok) {
-    const message = data?.error || data?.detail || `Mus-API returned ${response.status}`;
-    throw new Error(String(message));
+    const nested = data?.data;
+    const message =
+      data?.error ||
+      data?.detail ||
+      nested?.error?.message ||
+      nested?.message ||
+      nested?.error ||
+      `Mus-API returned ${response.status}`;
+
+    const error: any = new Error(String(message));
+    error.status = response.status;
+    error.code = data?.error || nested?.error?.status || nested?.error?.reason || null;
+    error.detail = nested?.error?.reason || nested?.error?.message || data?.detail || null;
+    throw error;
   }
   return data as T;
 }

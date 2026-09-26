@@ -1,4 +1,4 @@
-import { loadAuth, saveAuth } from './storage';
+import { clearAuth, loadAuth, saveAuth } from './storage';
 import { listDevices, pausePlayback, playTrack, probeSpotifyProfile, refreshSpotifyToken, resolveSpotifyTrack, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
 export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
@@ -50,6 +50,10 @@ const runtimeOwner = {};
 
 
 const PREFIX = '[Spotify Notes Bridge]';
+const REQUIRED_SPOTIFY_SCOPES = [
+  'user-read-playback-state',
+  'user-modify-playback-state',
+];
 
 function log(message: string, details?: unknown) {
   if (details === undefined) console.info(PREFIX, message);
@@ -144,6 +148,27 @@ async function ensureToken() {
   refreshToken = stored.refreshToken;
   log('refreshing Spotify OAuth access token');
   const token = await refreshSpotifyToken(refreshToken);
+
+  const grantedScope = String(token.scope || stored.scope || '').trim();
+  const grantedScopes = new Set(grantedScope.split(/\s+/).filter(Boolean));
+  const missingScopes = REQUIRED_SPOTIFY_SCOPES.filter((scope) => !grantedScopes.has(scope));
+
+  if (grantedScope && missingScopes.length) {
+    clearAuth();
+    accessToken = '';
+    tokenExpMs = 0;
+    refreshToken = '';
+    const scopeError: any = new Error('Spotify OAuth token is missing required playback scopes.');
+    scopeError.status = 401;
+    scopeError.code = 'MISSING_SPOTIFY_SCOPES';
+    scopeError.detail = missingScopes.join(', ');
+    warn('stored Spotify OAuth token is missing required scopes; forcing a fresh login', {
+      grantedScope,
+      missingScopes,
+    });
+    promptSpotifyLogin();
+    throw scopeError;
+  }
 
   accessToken = token.accessToken;
   tokenExpMs = token.tokenExpMs;
@@ -950,8 +975,16 @@ export function handleOAuthMessage(data: any) {
     return false;
   }
 
+  const callbackScope = String(data.scope || '').trim();
+  const callbackScopes = new Set(callbackScope.split(/\s+/).filter(Boolean));
+  const missingCallbackScopes = callbackScope
+    ? REQUIRED_SPOTIFY_SCOPES.filter((scope) => !callbackScopes.has(scope))
+    : [];
+
   log('Spotify OAuth callback received', {
-    scope: data.scope || null,
+    scope: callbackScope || null,
+    missingRequiredScopes: missingCallbackScopes,
+
     hasRefreshToken: Boolean(data.refreshToken),
     tokenExpMs: Number(data.tokenExpMs) || null,
   });

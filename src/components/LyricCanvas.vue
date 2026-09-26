@@ -373,6 +373,10 @@ function scheduleSync(reason: string) {
 }
 
 async function sync(reason: string) {
+  if (cfg.placement === "immersive") {
+    if (rootEl) rootEl.style.setProperty("display", "none", "important");
+    return;
+  }
   if (syncing || activeAbort || !canvasUrl.value || !canvasActive.value || canvasAnalysisPending.value || canvasSuppressedForAppleArtwork.value || reducedMotion.value) return;
   syncing = true;
   try {

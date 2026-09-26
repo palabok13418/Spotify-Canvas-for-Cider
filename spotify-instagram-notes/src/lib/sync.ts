@@ -42,8 +42,6 @@ let eventListenersInstalled = false;
 const eventCleanup: Array<() => void> = [];
 let lastLoggedCiderKey = '';
 let lastLoggedStatus = '';
-let playerAccessDenied = false;
-let playbackScopesMissing = false;
 
 const RUNTIME_KEY = '__CIDER_SPOTIFY_NOTES_BRIDGE_RUNTIME__';
 const runtimeOwner = {};
@@ -113,7 +111,6 @@ function emit(snapshot: BridgeSnapshot) {
       message: snapshot.message,
       ciderTitle: snapshot.ciderTitle || null,
       ciderArtist: snapshot.ciderArtist || null,
-      phone: snapshot.phoneDevice?.name || null,
     });
   }
   for (const listener of listeners) {
@@ -356,151 +353,11 @@ async function mirrorTrackInWebPlayer(track: SpotifyTrack, positionMs: number) {
   return true;
 }
 
+async function mirrorTrackInWebPlayer(track: SpotifyTrack, positionMs: number) {
+  return playSpotifyWebTrack(track.uri, positionMs);
+}
+
 async function syncOnce() {
-  if (!enabled || busy) return;
-
-  if (Date.now() < controlBlockedUntil) return;
-
-  const cider = getCiderTrack();
-  if (!cider) return;
-
-  const now = Date.now();
-  const predictedPosition =
-    lastObservedAt > 0 && lastPlaying
-      ? lastCiderPositionMs + Math.max(0, now - lastObservedAt)
-      : lastCiderPositionMs;
-
-  const seekDetected =
-    lastCiderKey === cider.key &&
-    cider.playing &&
-    lastPlaying &&
-    Math.abs(cider.positionMs - predictedPosition) > 2_500 &&
-    now - lastPositionSyncAt > 1_500;
-
-  lastObservedAt = now;
-  lastCiderPositionMs = cider.positionMs;
-
-  busy = true;
-
-  try {
-    const token = await ensureToken();
-    const trackChanged = cider.key !== lastCiderKey;
-    const transportChanged = cider.playing !== lastPlaying;
-
-    if (trackChanged) {
-      const shouldTryMatch =
-        cider.key !== lastMatchAttemptKey ||
-        now - lastMatchAttemptAt >= 10_000 ||
-        Boolean(currentResolvedTrack);
-
-      if (shouldTryMatch) {
-        lastMatchAttemptKey = cider.key;
-        lastMatchAttemptAt = now;
-        currentResolvedTrack = null;
-
-        emit({
-          status: 'syncing',
-          message: `Finding “${cider.title}” on Spotify…`,
-          ciderTitle: cider.title,
-          ciderArtist: cider.artist,
-          phoneDevice
-        });
-
-        currentResolvedTrack = await findSpotifyTrack(cider);
-      }
-
-      if (!currentResolvedTrack) {
-        emit({
-          status: 'error',
-          message: `Spotify match not found for “${cider.title}” by ${cider.artist}.`,
-          ciderTitle: cider.title,
-          ciderArtist: cider.artist
-        });
-        return;
-      }
-
-      lastCiderKey = cider.key;
-      lastSpotifyUri = currentResolvedTrack.uri;
-      lastPlaying = cider.playing;
-
-      if (!cider.playing) {
-        emit({
-          status: 'ready',
-          message: `Matched “${currentResolvedTrack.name}”. Cider is paused.`,
-          ciderTitle: cider.title,
-          ciderArtist: cider.artist,
-          spotifyTrack: currentResolvedTrack,
-          phoneDevice
-        });
-        return;
-      }
-
-      const phone = await playResolvedOnPhone(
-        token,
-        currentResolvedTrack,
-        cider.positionMs
-      );
-
-      if (!phone) {
-        emit({
-          status: 'spotify-required',
-          message: getPlaybackAvailabilityMessage(),
-          ciderTitle: cider.title,
-          ciderArtist: cider.artist,
-          spotifyTrack: currentResolvedTrack
-        });
-        return;
-      }
-
-      emit({
-        status: 'ready',
-        message: `Playing “${currentResolvedTrack.name}” on ${phone.name}.`,
-        ciderTitle: cider.title,
-        ciderArtist: cider.artist,
-        spotifyTrack: currentResolvedTrack,
-        phoneDevice: phone
-      });
-
-      return;
-    }
-
-    if (cider.playing && lastSpotifyUri && !phoneDevice && now - phoneCheckedAt >= 8_000) {
-      const phone = await playResolvedOnPhone(
-        token,
-        currentResolvedTrack || {
-          id: '',
-          uri: lastSpotifyUri,
-          name: cider.title,
-          artists: [cider.artist],
-          album: cider.album,
-          durationMs: cider.durationMs
-        },
-        cider.positionMs
-      );
-
-      if (phone) {
-        lastPlaying = true;
-        emit({
-          status: 'ready',
-          message: `Playing Spotify on ${phone.name}.`,
-          ciderTitle: cider.title,
-          ciderArtist: cider.artist,
-          spotifyTrack: currentResolvedTrack,
-          phoneDevice: phone
-        });
-      }
-
-      return;
-    }
-
-    if (transportChanged) {
-      const phone = phoneDevice || await getPhone();
-
-      if (!phone) {
-        emit({
-          status: 'spotify-required',
-          message: getPlaybackAvailabilityMessage(),
-          async function syncOnce() {
   if (!enabled || busy) return;
 
   const cider = getCiderTrack();
@@ -569,6 +426,7 @@ async function syncOnce() {
       ensureSpotifyWebPlayer();
 
       if (!cider.playing) {
+        pauseSpotifyWebPlayer();
         emit({
           status: 'ready',
           message: `Matched “${currentResolvedTrack.name}”. Cider is paused.`,
@@ -623,7 +481,10 @@ async function syncOnce() {
           return;
         }
 
-        const started = playSpotifyWebTrack(lastSpotifyUri, cider.positionMs);
+        const started = playSpotifyWebTrack(
+          lastSpotifyUri,
+          cider.positionMs
+        );
         lastPlaying = true;
 
         emit({
@@ -652,8 +513,6 @@ async function syncOnce() {
     }
 
     if (seekDetected) {
-      // The public Spotify website does not expose a cross-origin seek API.
-      // Keep the Web Player session intact rather than restarting the track.
       log('Cider seek detected; Spotify Web Player seek is not exposed to the plugin', {
         positionMs: cider.positionMs,
       });
@@ -709,6 +568,7 @@ async function syncOnce() {
     busy = false;
   }
 }
+
 export function promptSpotifyLogin() {
   if (!enabled || loadAuth() || loginWindowOpened) return false;
 
@@ -847,7 +707,7 @@ export function handleOAuthMessage(data: any) {
   if (data.refreshToken) {
     saveAuth({
       refreshToken: String(data.refreshToken),
-      savedAt: Date.now()
+      savedAt: Date.now(),
     });
   }
 

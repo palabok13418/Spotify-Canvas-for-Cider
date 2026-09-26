@@ -8,7 +8,14 @@ import {
 import SpotifyNotesPanel from './components/SpotifyNotesPanel.vue';
 import PluginConfig from './plugin.config';
 import { handleOAuthMessage, isEnabled, setEnabled, startBridge } from './lib/sync';
-import { MUS_API_BASE, openSpotifyAuth } from './lib/musApi';
+import { MUS_API_BASE } from './lib/musApi';
+
+const PREFIX = '[Spotify Notes Bridge]';
+console.info(PREFIX, 'plugin entry loaded', {
+  version: PluginConfig.version,
+  musApiBase: MUS_API_BASE,
+  href: globalThis.location?.href || null,
+});
 
 const PanelElement = defineCustomElement(SpotifyNotesPanel, { shadowRoot: false });
 
@@ -25,6 +32,7 @@ function openPanel(customElementName: (name: string) => string) {
 
 function toggleMirroring() {
   const next = !isEnabled();
+  console.info(PREFIX, 'mirroring toggle clicked', { enabled: next });
   setEnabled(next);
 
   const button = findSpotifyMirroringButton();
@@ -174,10 +182,13 @@ function registerSpotifyMirroringButton() {
       });
 
       registered = true;
-      console.log('[Spotify Notes Bridge] mirroring button registered');
+      console.info(PREFIX, 'mirroring button registered', {
+        element: isEnabled() ? 'Pause mirroring' : 'Resume mirroring',
+        location: 'chrome-top/right',
+      });
       moveSpotifyMirroringButtonBeforeNotifications();
     } catch (error) {
-      console.warn('[Spotify Notes Bridge] waiting for Cider CustomButtons API', error);
+      console.warn(PREFIX, 'waiting for Cider CustomButtons API', error);
     }
   };
 
@@ -192,7 +203,7 @@ function registerSpotifyMirroringButton() {
       attempts += 1;
       if (attempts >= 80) {
         window.clearInterval(registerTimer);
-        console.warn('[Spotify Notes Bridge] could not register mirroring button');
+        console.warn(PREFIX, 'could not register mirroring button after repeated attempts');
       }
     }
   }, 250);
@@ -237,6 +248,12 @@ const { plugin, customElementName } = definePluginContext({
   CustomElements,
 
   setup() {
+    console.info(PREFIX, 'plugin setup() called', {
+      hasCiderApp: Boolean((globalThis as any).CiderApp),
+      hasPluginSys: Boolean((globalThis as any).__PLUGINSYS__),
+      hasAppleMusicStore: Boolean((globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore),
+    });
+
     const panelName = customElementName('spotify-notes-panel');
 
     if (!customElements.get(panelName)) {
@@ -248,6 +265,7 @@ const { plugin, customElementName } = definePluginContext({
       onClick: () => openPanel(customElementName),
     });
 
+    console.info(PREFIX, 'main menu entry registered');
     registerSpotifyMirroringButton();
 
     const musApiOrigin = new URL(MUS_API_BASE).origin;
@@ -256,10 +274,12 @@ const { plugin, customElementName } = definePluginContext({
       if (event.origin !== musApiOrigin) return;
       if (event.data?.type !== 'musaudio_spotify_oauth') return;
 
+      console.info(PREFIX, 'accepted Spotify OAuth callback message from Mus-API');
       handleOAuthMessage(event.data.data);
     });
 
     // The bridge starts when the plugin loads. The panel is only a control surface.
+    console.info(PREFIX, 'starting playback mirror bridge');
     startBridge();
   },
 });

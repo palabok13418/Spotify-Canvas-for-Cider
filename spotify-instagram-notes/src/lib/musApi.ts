@@ -91,6 +91,22 @@ export async function spotifyApi<T>(accessToken: string, path: string, method = 
   }
 }
 
+export async function probeSpotifyProfile(accessToken: string) {
+  try {
+    const result = await spotifyApi<{ ok: boolean; data?: { id?: string } }>(accessToken, '/me');
+    return {
+      ok: Boolean(result?.ok),
+      id: typeof result?.data?.id === 'string' ? result.data.id : null,
+    };
+  } catch (error: any) {
+    return {
+      ok: false,
+      status: Number(error?.status) || 0,
+      message: String(error?.message || error || 'Spotify profile probe failed'),
+    };
+  }
+}
+
 export async function listDevices(accessToken: string): Promise<SpotifyDevice[]> {
   const result = await spotifyApi<{ ok: boolean; data?: { devices?: Array<any> } }>(accessToken, '/me/player/devices');
   if (!result?.ok) throw new Error('Unable to read Spotify devices');

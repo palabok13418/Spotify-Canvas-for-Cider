@@ -36,6 +36,8 @@ let lastMatchAttemptAt = 0;
 let busy = false;
 let timer = 0;
 let loginWindowOpened = false;
+let eventListenersInstalled = false;
+const eventCleanup: Array<() => void> = [];
 let controlBlockedUntil = 0;
 let lastLoggedCiderKey = '';
 let lastLoggedStatus = '';
@@ -75,6 +77,7 @@ export function setEnabled(value: boolean) {
   enabled = value;
 
   if (value) {
+    controlBlockedUntil = 0;
     promptSpotifyLogin();
     emit(
       loadAuth()
@@ -214,12 +217,27 @@ function getCiderTrack() {
 
   const positionMs = readPositionMs(store, item, attrs);
 
-  const playing =
-    typeof store.isPlaying === 'boolean'
-      ? store.isPlaying
-      : typeof store.audioElement?.paused === 'boolean'
-        ? !store.audioElement.paused
-        : false;
+  const mediaSessionPlaybackState =
+    typeof navigator.mediaSession?.playbackState === 'string'
+      ? navigator.mediaSession.playbackState
+      : '';
+
+  let playingSource = 'none';
+  let playing = false;
+
+  if (typeof store.isPlaying === 'boolean') {
+    playing = store.isPlaying;
+    playingSource = 'appleMusicStore.isPlaying';
+  } else if (mediaSessionPlaybackState === 'playing' || mediaSessionPlaybackState === 'paused') {
+    playing = mediaSessionPlaybackState === 'playing';
+    playingSource = 'navigator.mediaSession.playbackState';
+  } else if (typeof store.audioElement?.paused === 'boolean') {
+    playing = !store.audioElement.paused;
+    playingSource = 'appleMusicStore.audioElement.paused';
+  } else if (typeof store.player?.paused === 'boolean') {
+    playing = !store.player.paused;
+    playingSource = 'appleMusicStore.player.paused';
+  }
 
   if (!title || !artist) {
     warn('Cider now-playing item exists but title/artist could not be read', {
@@ -259,6 +277,8 @@ function getCiderTrack() {
       durationMs: track.durationMs || null,
       positionMs: track.positionMs,
       playing: track.playing,
+      playingSource,
+      mediaSessionPlaybackState: mediaSessionPlaybackState || null,
       id: track.id || null,
     });
   }
@@ -781,6 +801,39 @@ export function promptSpotifyLogin() {
   return true;
 }
 
+function installPlaybackEventListeners() {
+  if (eventListenersInstalled) return;
+
+  const papi = (globalThis as any).__PLUGINSYS__?.PAPIInstance;
+  if (!papi || typeof papi.addEventListener !== 'function') {
+    warn('Cider PAPI event system is not available; using polling fallback only');
+    return;
+  }
+
+  for (const eventName of ['player:state_changed', 'playback:state_changed']) {
+    const listener = () => {
+      log('Cider playback event received', { event: eventName });
+      void syncOnce();
+    };
+
+    papi.addEventListener(eventName, listener);
+    eventCleanup.push(() => {
+      try { papi.removeEventListener?.(eventName, listener); } catch {}
+    });
+  }
+
+  eventListenersInstalled = true;
+  log('Cider playback event listeners installed');
+}
+
+function removePlaybackEventListeners() {
+  while (eventCleanup.length) {
+    const cleanup = eventCleanup.pop();
+    try { cleanup?.(); } catch {}
+  }
+  eventListenersInstalled = false;
+}
+
 export function startBridge() {
   if (timer) {
     log('startBridge() ignored because bridge is already running');
@@ -800,6 +853,8 @@ export function startBridge() {
     log('stored Spotify OAuth refresh token found');
   }
 
+  installPlaybackEventListeners();
+
   timer = window.setInterval(() => {
     void syncOnce();
   }, 1_200);
@@ -809,6 +864,8 @@ export function startBridge() {
 export function stopBridge() {
   if (timer) window.clearInterval(timer);
   timer = 0;
+  removePlaybackEventListeners();
+  log('bridge stopped');
 }
 
 export function handleOAuthMessage(data: any) {

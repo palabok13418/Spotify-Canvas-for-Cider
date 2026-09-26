@@ -373,7 +373,7 @@ function scheduleSync(reason: string) {
 }
 
 async function sync(reason: string) {
-  if (cfg.placement === "immersive") {
+  if (String(cfg.placement) === "immersive") {
     if (rootEl) rootEl.style.setProperty("display", "none", "important");
     return;
   }
@@ -391,7 +391,7 @@ async function sync(reason: string) {
     if (!setRectangle(host)) return;
     try { await videoEl!.play(); } catch {}
     if (lastPlacement !== cfg.placement) {
-      applyTransition(cfg.placement === "immersive" ? "enter" : "exit");
+      applyTransition(String(cfg.placement) === "immersive" ? "enter" : "exit");
       lastPlacement = cfg.placement;
     }
   } finally {

@@ -21,6 +21,7 @@ let tokenExpMs = 0;
 let refreshToken = '';
 let selectedPhoneId = '';
 let lastCiderKey = '';
+let lastSpotifyUri = '';
 let lastPlaying = false;
 let busy = false;
 let timer = 0;
@@ -68,7 +69,7 @@ function norm(value: string) {
   return value.toLowerCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^a-z0-9]+/g, ' ').trim();
 }
 
-function scoreTrack(candidate: SpotifyTrack, cider: { title: string; artist: string; album: string; isrc: string }) {
+function scoreTrack(candidate: SpotifyTrack, cider: { title: string; artist: string; album: string }) {
   const titleA = norm(cider.title);
   const artistA = norm(cider.artist);
   const albumA = norm(cider.album);
@@ -121,21 +122,29 @@ async function syncOnce() {
       return;
     }
 
-    emit({ status: 'syncing', message: `Finding “${cider.title}” on Spotify…`, ciderTitle: cider.title, ciderArtist: cider.artist, phoneDevice: phone });
     if (needsTrackChange) {
+      emit({ status: 'syncing', message: `Finding “${cider.title}” on Spotify…`, ciderTitle: cider.title, ciderArtist: cider.artist, phoneDevice: phone });
       const track = await findExactSpotifyTrack(token, cider);
       if (!track) {
         emit({ status: 'error', message: `Spotify match not found for “${cider.title}” by ${cider.artist}.`, ciderTitle: cider.title, ciderArtist: cider.artist, phoneDevice: phone });
         return;
       }
       await playTrack(token, phone.id, track.uri, 0);
-      emit({ status: 'ready', message: `Playing “${track.name}” on ${phone.name}.`, ciderTitle: cider.title, ciderArtist: cider.artist, spotifyTrack: track, phoneDevice: phone });
       lastCiderKey = key;
+      lastSpotifyUri = track.uri;
       lastPlaying = true;
+      emit({ status: 'ready', message: `Playing “${track.name}” on ${phone.name}.`, ciderTitle: cider.title, ciderArtist: cider.artist, spotifyTrack: track, phoneDevice: phone });
       return;
     }
 
-    if (!cider.playing && needsPlayState) {
+    if (cider.playing && !lastPlaying && lastSpotifyUri) {
+      await playTrack(token, phone.id, lastSpotifyUri, 0);
+      lastPlaying = true;
+      emit({ status: 'ready', message: `Resumed Spotify on ${phone.name}.`, ciderTitle: cider.title, ciderArtist: cider.artist, phoneDevice: phone });
+      return;
+    }
+
+    if (!cider.playing && lastPlaying) {
       await pausePlayback(token, selectedPhoneId);
       lastPlaying = false;
       emit({ status: 'ready', message: `Paused Spotify on ${phone.name}.`, ciderTitle: cider.title, ciderArtist: cider.artist, phoneDevice: phone });
@@ -177,6 +186,7 @@ export function handleOAuthMessage(data: any) {
     saveAuth({ refreshToken, scope: data.scope || undefined, savedAt: Date.now() });
   }
   lastCiderKey = '';
+  lastSpotifyUri = '';
   lastPlaying = false;
   emit({ status: 'ready', message: 'Spotify linked. Waiting for your next Cider track.' });
   void syncOnce();

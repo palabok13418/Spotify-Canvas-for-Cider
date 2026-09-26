@@ -1,0 +1,22 @@
+{
+  "name": "cider-spotify-instagram-notes",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vue-tsc -b && vite build",
+    "check": "vue-tsc -b --pretty false"
+  },
+  "dependencies": {
+    "@ciderapp/pluginkit": "github:ciderapp/pluginkit#cider-4",
+    "vue": "^3.5.35"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.9",
+    "@vitejs/plugin-vue": "^5.2.1",
+    "typescript": "^5.2.2",
+    "vite": "^8.0.16",
+    "vue-tsc": "^3.3.3"
+  },
+  "packageManager": "pnpm@9.10.0"
+}

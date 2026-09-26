@@ -45,7 +45,8 @@ onBeforeUnmount(() => {
     </div>
 
     <div class="actions">
-      <button class="primary" @click="linkSpotify">Link Spotify</button>
+      <button v-if="snapshot.status === 'link-required' || !snapshot.spotifyTrack" class="primary" @click="linkSpotify">Log in to Spotify</button>
+      <button v-else class="secondary" @click="linkSpotify">Reconnect Spotify</button>
       <button class="secondary" @click="toggle">{{ enabled ? 'Pause mirroring' : 'Resume mirroring' }}</button>
     </div>
 

@@ -1,6 +1,6 @@
 import { defineConfig, type Plugin } from 'vite';
 import vue from '@vitejs/plugin-vue';
-import PluginConfig from './src/plugin.config.ts';
+import PluginConfig from './src/plugin.config';
 
 const manifest = () => [
   `ce_prefix: ${PluginConfig.ce_prefix}`,

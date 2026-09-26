@@ -1,5 +1,5 @@
 import { loadAuth, saveAuth } from './storage';
-import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, resolveSpotifyTrack, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
+import { listDevices, pausePlayback, playTrack, probeSpotifyProfile, refreshSpotifyToken, resolveSpotifyTrack, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
 export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
 
@@ -39,8 +39,14 @@ let loginWindowOpened = false;
 let eventListenersInstalled = false;
 const eventCleanup: Array<() => void> = [];
 let controlBlockedUntil = 0;
+let lastCapabilityProbeAt = 0;
+let capabilityProbeInFlight: Promise<{ ok: boolean; id?: string | null; status?: number; message?: string }> | null = null;
 let lastLoggedCiderKey = '';
 let lastLoggedStatus = '';
+
+const RUNTIME_KEY = '__CIDER_SPOTIFY_NOTES_BRIDGE_RUNTIME__';
+const runtimeOwner = {};
+
 
 const PREFIX = '[Spotify Notes Bridge]';
 
@@ -122,6 +128,13 @@ async function ensureToken() {
   }
 
   const stored = loadAuth();
+  if (stored) {
+    log('stored Spotify OAuth state', {
+      hasRefreshToken: Boolean(stored.refreshToken),
+      grantedScope: stored.scope || null,
+      savedAt: stored.savedAt || null,
+    });
+  }
   if (!stored?.refreshToken) {
     warn('no stored Spotify OAuth refresh token');
     throw new Error('Spotify is not linked');
@@ -374,7 +387,39 @@ async function getPhone(force = false): Promise<SpotifyDevice | null> {
   const token = await ensureToken();
   log('requesting Spotify Connect devices');
 
-  const devices = await listDevices(token);
+  let devices: SpotifyDevice[];
+  try {
+    devices = await listDevices(token);
+  } catch (error: any) {
+    phoneDevice = null;
+    phoneCheckedAt = now;
+
+    if (Number(error?.status) === 403) {
+      const shouldProbe = now - lastCapabilityProbeAt >= 60_000;
+      if (shouldProbe) {
+        lastCapabilityProbeAt = now;
+        if (!capabilityProbeInFlight) {
+          log('Spotify devices endpoint returned 403; probing /me to distinguish app access from player access');
+          capabilityProbeInFlight = probeSpotifyProfile(token)
+            .finally(() => {
+              capabilityProbeInFlight = null;
+            });
+        }
+        const probe = await capabilityProbeInFlight;
+
+        if (!probe.ok && Number(probe.status) === 403) {
+          error.status = 403;
+          error.spotifyAppAccessDenied = true;
+          error.detail = 'Spotify rejected the authenticated user at /v1/me as well as /v1/me/player/devices.';
+        } else if (probe.ok) {
+          error.spotifyPlayerAccessDenied = true;
+          error.detail = 'Spotify /v1/me succeeded, but /v1/me/player/devices returned 403.';
+        }
+      }
+    }
+
+    throw error;
+  }
 
   log('Spotify Connect devices received', {
     count: devices.length,
@@ -727,8 +772,7 @@ async function syncOnce() {
         ciderArtist: cider.artist
       });
     } else if (status === 403) {
-      // A 403 does not mean the OAuth token is expired. Keep it and back off
-      // briefly so we don't refresh the same valid token over and over.
+      // A 403 does not mean the OAuth token is expired. Keep it and back off.
       controlBlockedUntil = Date.now() + 15_000;
 
       if (cider.key === lastCiderKey) {
@@ -737,11 +781,19 @@ async function syncOnce() {
         currentResolvedTrack = null;
       }
 
+      let message = endpoint
+        ? `Spotify rejected ${endpoint} with HTTP 403.`
+        : 'Spotify rejected the playback request with HTTP 403.';
+
+      if (error?.spotifyAppAccessDenied) {
+        message = 'Spotify rejected this app/user authorization. In Spotify Developer Dashboard, add this Spotify account to the app allowlist if the app is in Development Mode.';
+      } else if (error?.spotifyPlayerAccessDenied) {
+        message = 'Spotify accepted the account authorization, but denied Player API access. Check that this account can use Spotify Connect / playback controls (Premium may be required).';
+      }
+
       emit({
         status: 'error',
-        message: endpoint
-          ? `Spotify rejected ${endpoint} with HTTP 403.`
-          : 'Spotify rejected the playback request with HTTP 403.',
+        message,
         ciderTitle: cider.title,
         ciderArtist: cider.artist
       });
@@ -840,6 +892,20 @@ export function startBridge() {
     return;
   }
 
+  const existingRuntime = (globalThis as any)[RUNTIME_KEY];
+  if (existingRuntime?.active && existingRuntime.owner !== runtimeOwner) {
+    warn('another Spotify Notes Bridge instance is already active', {
+      startedAt: existingRuntime.startedAt || null,
+    });
+    return;
+  }
+
+  (globalThis as any)[RUNTIME_KEY] = {
+    active: true,
+    owner: runtimeOwner,
+    startedAt: Date.now(),
+  };
+
   log('bridge starting', {
     enabled,
     hasStoredAuth: Boolean(loadAuth()),
@@ -865,6 +931,12 @@ export function stopBridge() {
   if (timer) window.clearInterval(timer);
   timer = 0;
   removePlaybackEventListeners();
+
+  const runtime = (globalThis as any)[RUNTIME_KEY];
+  if (runtime?.owner === runtimeOwner) {
+    delete (globalThis as any)[RUNTIME_KEY];
+  }
+
   log('bridge stopped');
 }
 
@@ -893,6 +965,8 @@ export function handleOAuthMessage(data: any) {
   }
 
   controlBlockedUntil = 0;
+  lastCapabilityProbeAt = 0;
+  capabilityProbeInFlight = null;
   phoneDevice = null;
   phoneCheckedAt = 0;
   lastCiderKey = '';

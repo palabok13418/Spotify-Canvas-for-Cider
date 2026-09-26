@@ -148,57 +148,40 @@ export function muteSpotifyWebPlayer() {
     return false;
   }
 
-  let attempted = false;
+  let hostRequestSent = false;
 
+  // Windows Cider uses WebView2. WebView2 exposes CoreWebView2.IsMuted,
+  // which mutes all audio produced by that WebView without muting the Cider
+  // application. The plugin cannot reach CoreWebView2 directly, so ask the
+  // Cider WebView2 host to apply that native mute to the named child window.
   try {
-    // Best-effort: ask the Spotify page whether it handles a bridge message.
-    // The page remains cross-origin, so this is intentionally non-invasive.
-    playerWindow.postMessage(
-      { type: 'cider-spotify-mute-request', key: 'm' },
-      'https://open.spotify.com',
-    );
-    attempted = true;
+    const webview = (window as any).chrome?.webview;
+    if (typeof webview?.postMessage === 'function') {
+      webview.postMessage({
+        type: 'cider-spotify-notes:web-player-audio',
+        action: 'mute',
+        windowName: WINDOW_NAME,
+        origin: BASE_URL,
+      });
+      hostRequestSent = true;
+      log('requested native WebView2 mute for Spotify Web Player', {
+        windowName: WINDOW_NAME,
+      });
+    }
   } catch (error) {
-    warn('Spotify Web Player rejected the mute message', error);
+    warn('native WebView2 mute request was unavailable', error);
   }
 
   try {
-    // Some Chromium hosts permit focus/keyboard routing to a popup opened by
-    // the current page. This does not access Spotify's DOM and is harmless if
-    // the host ignores synthetic keyboard events.
-    playerWindow.focus?.();
-    playerWindow.dispatchEvent(
-      new KeyboardEvent('keydown', {
-        key: 'm',
-        code: 'KeyM',
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    playerWindow.dispatchEvent(
-      new KeyboardEvent('keyup', {
-        key: 'm',
-        code: 'KeyM',
-        bubbles: true,
-        cancelable: true,
-      }),
-    );
-    attempted = true;
-  } catch (error) {
-    warn('Spotify Web Player keyboard mute attempt was blocked by the browser', error);
-  } finally {
-    try {
-      playerWindow.blur?.();
-      window.focus?.();
-    } catch {}
+    playerWindow.blur?.();
+    window.focus?.();
+  } catch {}
+
+  if (!hostRequestSent) {
+    warn('Cider native WebView2 mute bridge is not exposed; Spotify audio may remain audible');
   }
 
-  log('requested Spotify Web Player mute', {
-    attempted,
-    note: 'cross-origin browser security may prevent the page from accepting the synthetic M shortcut',
-  });
-
-  return attempted;
+  return hostRequestSent;
 }
 
 export function playSpotifyWebTrack(uri: string, positionMs = 0) {

@@ -1,5 +1,5 @@
 import { clearAuth, loadAuth, saveAuth } from './storage';
-import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, searchTracks, spotifyApi, type SpotifyDevice, type SpotifyTrack } from './musApi';
+import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, searchTracks, spotifyApi, MUS_API_BASE, type SpotifyDevice, type SpotifyTrack } from './musApi';import { listDevices, pausePlayback, playTrack, refreshSpotifyToken, searchTracks, spotifyApi, type SpotifyDevice, type SpotifyTrack } from './musApi';
 
 export type BridgeStatus = 'disabled' | 'link-required' | 'spotify-required' | 'ready' | 'syncing' | 'error';
 
@@ -35,6 +35,7 @@ let lastMatchAttemptAt = 0;
 
 let busy = false;
 let timer = 0;
+let loginWindowOpened = false;
 
 let currentSnapshot: BridgeSnapshot = {
   status: 'link-required',
@@ -52,11 +53,19 @@ export function onBridgeChange(listener: Listener) {
 
 export function setEnabled(value: boolean) {
   enabled = value;
-  emit(
-    value
-      ? currentSnapshot
-      : { status: 'disabled', message: 'Spotify mirroring is paused.' }
-  );
+
+  if (value) {
+    promptSpotifyLogin();
+    emit(
+      loadAuth()
+        ? currentSnapshot
+        : { status: 'link-required', message: 'Spotify login required. A Spotify login window has been opened.' }
+    );
+    void syncOnce();
+    return;
+  }
+
+  emit({ status: 'disabled', message: 'Spotify mirroring is paused.' });
 }
 
 export function isEnabled() {
@@ -632,8 +641,46 @@ async function syncOnce() {
   }
 }
 
+export function promptSpotifyLogin() {
+  if (!enabled || loadAuth() || loginWindowOpened) return false;
+
+  loginWindowOpened = true;
+  const origin = window.location.origin === 'null' ? '*' : window.location.origin;
+  const url = new URL('/api/spotify/auth', MUS_API_BASE);
+  url.searchParams.set('origin', origin);
+  url.searchParams.set('returnTo', window.location.href);
+  url.searchParams.set('reason', 'first-run-mirroring');
+
+  const popup = window.open(
+    url.toString(),
+    'musapi-spotify-auth',
+    'width=520,height=760,resizable=yes,scrollbars=yes'
+  );
+
+  if (!popup) {
+    loginWindowOpened = false;
+    emit({
+      status: 'link-required',
+      message: 'Spotify login is required. Open the Spotify login window from the plugin panel.',
+    });
+    return false;
+  }
+
+  emit({
+    status: 'link-required',
+    message: 'Log in to Spotify in the new window to enable playback mirroring.',
+  });
+
+  return true;
+}
+
 export function startBridge() {
   if (timer) return;
+
+  if (!loadAuth()) {
+    promptSpotifyLogin();
+  }
+
   timer = window.setInterval(() => {
     void syncOnce();
   }, 1_200);
@@ -670,6 +717,8 @@ export function handleOAuthMessage(data: any) {
   lastPlaying = false;
   lastCiderPositionMs = 0;
   lastObservedAt = 0;
+
+  loginWindowOpened = false;
 
   emit({
     status: 'ready',

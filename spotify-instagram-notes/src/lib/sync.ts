@@ -984,10 +984,28 @@ export function handleOAuthMessage(data: any) {
   log('Spotify OAuth callback received', {
     scope: callbackScope || null,
     missingRequiredScopes: missingCallbackScopes,
-
     hasRefreshToken: Boolean(data.refreshToken),
     tokenExpMs: Number(data.tokenExpMs) || null,
   });
+
+  if (missingCallbackScopes.length) {
+    clearAuth();
+    accessToken = '';
+    tokenExpMs = 0;
+    refreshToken = '';
+    loginWindowOpened = false;
+
+    emit({
+      status: 'link-required',
+      message: `Spotify login did not grant the required playback permissions: ${missingCallbackScopes.join(', ')}.`,
+    });
+
+    warn('Spotify OAuth callback is missing required playback scopes', {
+      grantedScope: callbackScope,
+      missingScopes: missingCallbackScopes,
+    });
+    return false;
+  }
 
   accessToken = String(data.accessToken);
   tokenExpMs = Number(data.tokenExpMs) || Date.now() + 3_300_000;

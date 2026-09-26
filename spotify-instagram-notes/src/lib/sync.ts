@@ -39,6 +39,7 @@ let loginWindowOpened = false;
 let eventListenersInstalled = false;
 const eventCleanup: Array<() => void> = [];
 let controlBlockedUntil = 0;
+let controlBackoffMs = 15_000;
 let lastCapabilityProbeAt = 0;
 let capabilityProbeInFlight: Promise<{ ok: boolean; id?: string | null; status?: number; message?: string }> | null = null;
 let lastLoggedCiderKey = '';
@@ -772,8 +773,11 @@ async function syncOnce() {
         ciderArtist: cider.artist
       });
     } else if (status === 403) {
-      // A 403 does not mean the OAuth token is expired. Keep it and back off.
-      controlBlockedUntil = Date.now() + 15_000;
+      // 403 from the Spotify Player API is an authorization/entitlement
+      // problem, not a transient token-expiry condition. Use exponential
+      // backoff so polling/event bursts cannot hammer the API.
+      controlBlockedUntil = Date.now() + controlBackoffMs;
+      controlBackoffMs = Math.min(controlBackoffMs * 2, 5 * 60_000);
 
       if (cider.key === lastCiderKey) {
         lastCiderKey = '';
@@ -965,6 +969,7 @@ export function handleOAuthMessage(data: any) {
   }
 
   controlBlockedUntil = 0;
+  controlBackoffMs = 15_000;
   lastCapabilityProbeAt = 0;
   capabilityProbeInFlight = null;
   phoneDevice = null;

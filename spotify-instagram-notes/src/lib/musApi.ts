@@ -120,6 +120,39 @@ export async function listDevices(accessToken: string): Promise<SpotifyDevice[]>
   })).filter((d) => d.id);
 }
 
+export async function muteSpotifyDevice(accessToken: string, deviceId: string) {
+  if (!deviceId) throw new Error('Spotify device ID is missing');
+
+  return spotifyApi(
+    accessToken,
+    `/me/player/volume?volume_percent=0&device_id=${encodeURIComponent(deviceId)}`,
+    'PUT',
+  );
+}
+
+export async function muteActiveSpotifyComputer(accessToken: string): Promise<SpotifyDevice | null> {
+  const devices = await listDevices(accessToken);
+
+  // The Spotify Web Player reports as a computer device. Prefer an active
+  // browser/web-player-looking device so we do not mute a phone or speaker.
+  const computers = devices.filter((device) => (
+    device.type.toLowerCase() === 'computer' && device.isActive
+  ));
+
+  const preferred =
+    computers.find((device) => /web player|chrome|edge|cider|browser/i.test(device.name)) ||
+    computers[0] ||
+    null;
+
+  if (!preferred) return null;
+
+  await muteSpotifyDevice(accessToken, preferred.id);
+  return {
+    ...preferred,
+    volumePercent: 0,
+  };
+}
+
 export async function searchTracks(accessToken: string, query: string): Promise<SpotifyTrack[]> {
   const result = await spotifyApi<{ ok: boolean; data?: { tracks?: { items?: Array<any> } } }>(
     accessToken,

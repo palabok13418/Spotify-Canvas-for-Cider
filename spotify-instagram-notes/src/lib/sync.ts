@@ -21,13 +21,18 @@ let tokenExpMs = 0;
 let refreshToken = '';
 let phoneDevice: SpotifyDevice | null = null;
 let phoneCheckedAt = 0;
+
 let lastCiderKey = '';
 let lastSpotifyUri = '';
 let lastPlaying = false;
 let lastCiderPositionMs = 0;
 let lastObservedAt = 0;
 let lastPositionSyncAt = 0;
+
 let currentResolvedTrack: SpotifyTrack | null = null;
+let lastMatchAttemptKey = '';
+let lastMatchAttemptAt = 0;
+
 let busy = false;
 let timer = 0;
 
@@ -97,9 +102,28 @@ function getCiderTrack() {
   if (!item) return null;
 
   const attrs = item.attributes ?? item;
-  const title = String(attrs.name || attrs.title || attrs.trackName || '').trim();
-  const artist = String(attrs.artistName || attrs.artist || '').trim();
-  const album = String(attrs.albumName || attrs.album || '').trim();
+
+  const title = String(
+    attrs.name ||
+    attrs.title ||
+    attrs.trackName ||
+    item.name ||
+    ''
+  ).trim();
+
+  const artist = String(
+    attrs.artistName ||
+    attrs.artist ||
+    item.artistName ||
+    ''
+  ).trim();
+
+  const album = String(
+    attrs.albumName ||
+    attrs.album ||
+    item.albumName ||
+    ''
+  ).trim();
 
   const isrc = String(
     attrs.isrc ||
@@ -206,19 +230,30 @@ function scoreTrack(
   const wantedAlbum = normalize(cider.album);
 
   const candidateTitle = normalize(candidate.name);
-  const candidateArtist = normalize(candidate.artists[0] || candidate.artists.join(', '));
+  const candidateArtist = normalize(
+    candidate.artists[0] || candidate.artists.join(', ')
+  );
   const candidateAlbum = normalize(candidate.album);
 
   let score = 0;
 
   if (wantedTitle && candidateTitle === wantedTitle) score += 55;
-  else if (wantedTitle && (candidateTitle.includes(wantedTitle) || wantedTitle.includes(candidateTitle))) score += 35;
+  else if (
+    wantedTitle &&
+    (candidateTitle.includes(wantedTitle) || wantedTitle.includes(candidateTitle))
+  ) score += 35;
 
   if (wantedArtist && candidateArtist === wantedArtist) score += 35;
-  else if (wantedArtist && (candidateArtist.includes(wantedArtist) || wantedArtist.includes(candidateArtist))) score += 20;
+  else if (
+    wantedArtist &&
+    (candidateArtist.includes(wantedArtist) || wantedArtist.includes(candidateArtist))
+  ) score += 20;
 
   if (wantedAlbum && candidateAlbum === wantedAlbum) score += 8;
-  else if (wantedAlbum && (candidateAlbum.includes(wantedAlbum) || wantedAlbum.includes(candidateAlbum))) score += 4;
+  else if (
+    wantedAlbum &&
+    (candidateAlbum.includes(wantedAlbum) || wantedAlbum.includes(candidateAlbum))
+  ) score += 4;
 
   if (cider.durationMs && candidate.durationMs) {
     const delta = Math.abs(candidate.durationMs - cider.durationMs);
@@ -229,13 +264,16 @@ function scoreTrack(
   return score;
 }
 
-async function findSpotifyTrack(token: string, cider: {
-  title: string;
-  artist: string;
-  album: string;
-  isrc: string;
-  durationMs: number;
-}) {
+async function findSpotifyTrack(
+  token: string,
+  cider: {
+    title: string;
+    artist: string;
+    album: string;
+    isrc: string;
+    durationMs: number;
+  }
+) {
   const queries = [
     ...(cider.isrc ? [`isrc:${cider.isrc}`] : []),
     `track:"${cider.title.replace(/"/g, '')}" artist:"${cider.artist.replace(/"/g, '')}" album:"${cider.album.replace(/"/g, '')}"`,
@@ -259,13 +297,15 @@ async function findSpotifyTrack(token: string, cider: {
 
   if (!candidates.length) return null;
 
-  return candidates
+  const ranked = candidates
     .map((track) => ({
       track,
       score: scoreTrack(track, cider)
     }))
-    .sort((a, b) => b.score - a.score)[0]
-    ?.track || null;
+    .sort((a, b) => b.score - a.score);
+
+  const best = ranked[0];
+  return best && best.score >= 60 ? best.track : null;
 }
 
 async function getPhone(force = false): Promise<SpotifyDevice | null> {
@@ -278,12 +318,6 @@ async function getPhone(force = false): Promise<SpotifyDevice | null> {
   const token = await ensureToken();
   const devices = await listDevices(token);
 
-  const preferredName = String(
-    loadAuth()?.scope && '' // keeps this module compatible with the existing storage shape
-      ? ''
-      : ''
-  );
-
   const phones = devices.filter(
     (device) =>
       device.type.toLowerCase() === 'smartphone' &&
@@ -291,7 +325,6 @@ async function getPhone(force = false): Promise<SpotifyDevice | null> {
   );
 
   phoneDevice =
-    phones.find((device) => preferredName && device.name.toLowerCase() === preferredName.toLowerCase()) ||
     phones.find((device) => device.isActive) ||
     phones[0] ||
     null;
@@ -304,6 +337,7 @@ async function seekOnPhone(positionMs: number) {
   if (!phoneDevice || !lastSpotifyUri) return;
 
   const token = await ensureToken();
+
   await spotifyApi(
     token,
     `/me/player/seek?position_ms=${Math.max(0, Math.floor(positionMs))}&device_id=${encodeURIComponent(phoneDevice.id)}`,
@@ -311,6 +345,29 @@ async function seekOnPhone(positionMs: number) {
   );
 
   lastPositionSyncAt = Date.now();
+}
+
+async function playResolvedOnPhone(token: string, track: SpotifyTrack, positionMs: number) {
+  let phone = await getPhone();
+
+  if (!phone) return null;
+
+  try {
+    await playTrack(token, phone.id, track.uri, positionMs);
+  } catch (error: any) {
+    if (Number(error?.status) !== 404 && Number(error?.status) !== 502) {
+      throw error;
+    }
+
+    phone = await getPhone(true);
+    if (!phone) return null;
+
+    await playTrack(token, phone.id, track.uri, positionMs);
+  }
+
+  phoneDevice = phone;
+  lastPositionSyncAt = Date.now();
+  return phone;
 }
 
 async function syncOnce() {
@@ -326,33 +383,43 @@ async function syncOnce() {
       : lastCiderPositionMs;
 
   const seekDetected =
-    !cider.key || lastCiderKey === ''
-      ? false
-      : cider.playing &&
-        lastPlaying &&
-        Math.abs(cider.positionMs - predictedPosition) > 2_500 &&
-        now - lastPositionSyncAt > 1_500;
+    lastCiderKey === cider.key &&
+    cider.playing &&
+    lastPlaying &&
+    Math.abs(cider.positionMs - predictedPosition) > 2_500 &&
+    now - lastPositionSyncAt > 1_500;
 
   lastObservedAt = now;
   lastCiderPositionMs = cider.positionMs;
 
   busy = true;
+
   try {
     const token = await ensureToken();
-
     const trackChanged = cider.key !== lastCiderKey;
     const transportChanged = cider.playing !== lastPlaying;
 
     if (trackChanged) {
-      emit({
-        status: 'syncing',
-        message: `Finding “${cider.title}” on Spotify…`,
-        ciderTitle: cider.title,
-        ciderArtist: cider.artist,
-        phoneDevice
-      });
+      const shouldTryMatch =
+        cider.key !== lastMatchAttemptKey ||
+        now - lastMatchAttemptAt >= 10_000 ||
+        Boolean(currentResolvedTrack);
 
-      currentResolvedTrack = await findSpotifyTrack(token, cider);
+      if (shouldTryMatch) {
+        lastMatchAttemptKey = cider.key;
+        lastMatchAttemptAt = now;
+        currentResolvedTrack = null;
+
+        emit({
+          status: 'syncing',
+          message: `Finding “${cider.title}” on Spotify…`,
+          ciderTitle: cider.title,
+          ciderArtist: cider.artist,
+          phoneDevice
+        });
+
+        currentResolvedTrack = await findSpotifyTrack(token, cider);
+      }
 
       if (!currentResolvedTrack) {
         emit({
@@ -364,50 +431,38 @@ async function syncOnce() {
         return;
       }
 
-      if (!cider.playing) {
-        lastCiderKey = cider.key;
-        lastSpotifyUri = currentResolvedTrack.uri;
-        lastPlaying = false;
+      lastCiderKey = cider.key;
+      lastSpotifyUri = currentResolvedTrack.uri;
+      lastPlaying = cider.playing;
 
+      if (!cider.playing) {
         emit({
           status: 'ready',
           message: `Matched “${currentResolvedTrack.name}”. Cider is paused.`,
           ciderTitle: cider.title,
           ciderArtist: cider.artist,
-          spotifyTrack: currentResolvedTrack
+          spotifyTrack: currentResolvedTrack,
+          phoneDevice
         });
         return;
       }
 
-      let phone = await getPhone();
+      const phone = await playResolvedOnPhone(
+        token,
+        currentResolvedTrack,
+        cider.positionMs
+      );
 
       if (!phone) {
         emit({
           status: 'spotify-required',
           message: 'Open Spotify on your phone so it appears as a playback device.',
           ciderTitle: cider.title,
-          ciderArtist: cider.artist
+          ciderArtist: cider.artist,
+          spotifyTrack: currentResolvedTrack
         });
         return;
       }
-
-      try {
-        await playTrack(token, phone.id, currentResolvedTrack.uri, cider.positionMs);
-      } catch (error: any) {
-        if (Number(error?.status) === 404 || Number(error?.status) === 502) {
-          phone = await getPhone(true);
-          if (!phone) throw new Error('Your Spotify phone disappeared from the device list.');
-          await playTrack(token, phone.id, currentResolvedTrack.uri, cider.positionMs);
-        } else {
-          throw error;
-        }
-      }
-
-      phoneDevice = phone;
-      lastCiderKey = cider.key;
-      lastSpotifyUri = currentResolvedTrack.uri;
-      lastPlaying = true;
-      lastPositionSyncAt = Date.now();
 
       emit({
         status: 'ready',
@@ -421,6 +476,35 @@ async function syncOnce() {
       return;
     }
 
+    if (cider.playing && lastSpotifyUri && !phoneDevice && now - phoneCheckedAt >= 8_000) {
+      const phone = await playResolvedOnPhone(
+        token,
+        currentResolvedTrack || {
+          id: '',
+          uri: lastSpotifyUri,
+          name: cider.title,
+          artists: [cider.artist],
+          album: cider.album,
+          durationMs: cider.durationMs
+        },
+        cider.positionMs
+      );
+
+      if (phone) {
+        lastPlaying = true;
+        emit({
+          status: 'ready',
+          message: `Playing Spotify on ${phone.name}.`,
+          ciderTitle: cider.title,
+          ciderArtist: cider.artist,
+          spotifyTrack: currentResolvedTrack,
+          phoneDevice: phone
+        });
+      }
+
+      return;
+    }
+
     if (transportChanged) {
       const phone = phoneDevice || await getPhone();
 
@@ -429,7 +513,8 @@ async function syncOnce() {
           status: 'spotify-required',
           message: 'Open Spotify on your phone so it appears as a playback device.',
           ciderTitle: cider.title,
-          ciderArtist: cider.artist
+          ciderArtist: cider.artist,
+          spotifyTrack: currentResolvedTrack
         });
         return;
       }
@@ -476,24 +561,22 @@ async function syncOnce() {
         });
       }
 
+      phoneDevice = phone;
       return;
     }
 
     if (seekDetected) {
-      const phone = phoneDevice || await getPhone();
-      if (phone) {
-        phoneDevice = phone;
-        try {
-          await seekOnPhone(cider.positionMs);
-          emit({
-            status: 'ready',
-            message: `Seeked Spotify to ${formatTime(cider.positionMs)} on ${phone.name}.`,
-            ciderTitle: cider.title,
-            ciderArtist: cider.artist,
-            spotifyTrack: currentResolvedTrack,
-            phoneDevice: phone
-          });
-        } catch {}
+      await seekOnPhone(cider.positionMs);
+
+      if (phoneDevice) {
+        emit({
+          status: 'ready',
+          message: `Seeked Spotify to ${formatTime(cider.positionMs)} on ${phoneDevice.name}.`,
+          ciderTitle: cider.title,
+          ciderArtist: cider.artist,
+          spotifyTrack: currentResolvedTrack,
+          phoneDevice
+        });
       }
     } else {
       emit({
@@ -524,7 +607,7 @@ async function syncOnce() {
     } else if (status === 403) {
       emit({
         status: 'error',
-        message: 'Spotify rejected playback control. Check that the account can use Spotify Connect playback.',
+        message: 'Spotify rejected playback control. Check the Spotify account/device permissions.',
         ciderTitle: cider.title,
         ciderArtist: cider.artist
       });
@@ -582,13 +665,17 @@ export function handleOAuthMessage(data: any) {
   lastCiderKey = '';
   lastSpotifyUri = '';
   currentResolvedTrack = null;
+  lastMatchAttemptKey = '';
+  lastMatchAttemptAt = 0;
   lastPlaying = false;
   lastCiderPositionMs = 0;
   lastObservedAt = 0;
+
   emit({
     status: 'ready',
     message: 'Spotify linked. Waiting for your current Cider track.'
   });
+
   void syncOnce();
   return true;
 }

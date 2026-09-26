@@ -8,9 +8,7 @@
     "check": "vue-tsc -b --pretty false"
   },
   "dependencies": {
-    "@ciderapp/pluginkit": "github:ciderapp/pluginkit#cider-4",
-    "vue": "^3.5.35",
-    "lodash": "^4.17.21"
+    "vue": "^3.5.35"
   },
   "devDependencies": {
     "@types/node": "^22.15.21",

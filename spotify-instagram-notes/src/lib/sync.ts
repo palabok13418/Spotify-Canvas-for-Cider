@@ -402,7 +402,7 @@ async function automaticallyMuteSpotifyWebPlayer(reason: string) {
 
   if (
     lastDeviceMuteTrack === lastSpotifyUri &&
-    now - lastDeviceMuteAt < 8_000
+    now - lastDeviceMuteAt < 2_000
   ) {
     return;
   }

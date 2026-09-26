@@ -113,3 +113,40 @@ export async function pausePlayback(accessToken: string, deviceId?: string) {
   const suffix = deviceId ? `?device_id=${encodeURIComponent(deviceId)}` : '';
   return spotifyApi(accessToken, `/me/player/pause${suffix}`, 'PUT');
 }
+
+
+export async function resolveSpotifyTrack(input: {
+  title: string;
+  artist: string;
+  album?: string;
+  durationMs?: number;
+  isrc?: string;
+}): Promise<SpotifyTrack | null> {
+  const url = new URL('/api/spotify/search-uri', MUS_API_BASE);
+  if (input.title) url.searchParams.set('title', input.title);
+  if (input.artist) url.searchParams.set('artist', input.artist);
+  if (input.album) url.searchParams.set('album', input.album);
+  if (input.durationMs) url.searchParams.set('durationMs', String(input.durationMs));
+
+  const response = await fetch(url.toString(), {
+    method: 'GET',
+    cache: 'no-store',
+  });
+
+  const data = await response.json().catch(() => null);
+
+  if (!response.ok || !data?.ok || !data?.id || !data?.uri) {
+    return null;
+  }
+
+  return {
+    id: String(data.id),
+    uri: String(data.uri),
+    name: String(data.name || ''),
+    artists: Array.isArray(data.artists)
+      ? data.artists.map((artist: unknown) => String(artist || '')).filter(Boolean)
+      : [],
+    album: String(data.album || ''),
+    durationMs: Number(data.durationMs) || undefined,
+  };
+}

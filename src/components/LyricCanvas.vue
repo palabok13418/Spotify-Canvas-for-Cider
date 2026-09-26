@@ -373,6 +373,10 @@ function scheduleSync(reason: string) {
 }
 
 async function sync(reason: string) {
+  if (String(cfg.placement) === "immersive") {
+    if (rootEl) rootEl.style.setProperty("display", "none", "important");
+    return;
+  }
   if (syncing || activeAbort || !canvasUrl.value || !canvasActive.value || canvasAnalysisPending.value || canvasSuppressedForAppleArtwork.value || reducedMotion.value) return;
   syncing = true;
   try {
@@ -387,7 +391,7 @@ async function sync(reason: string) {
     if (!setRectangle(host)) return;
     try { await videoEl!.play(); } catch {}
     if (lastPlacement !== cfg.placement) {
-      applyTransition(cfg.placement === "immersive" ? "enter" : "exit");
+      applyTransition(String(cfg.placement) === "immersive" ? "enter" : "exit");
       lastPlacement = cfg.placement;
     }
   } finally {

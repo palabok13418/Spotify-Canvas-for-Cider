@@ -1,3 +1,4 @@
+import fs from "node:fs";
 import { defineConfig, type Plugin } from "vite";
 import vue from "@vitejs/plugin-vue";
 import cssInjectedByJsPlugin from "vite-plugin-css-injected-by-js";
@@ -13,7 +14,7 @@ const yaml = (obj: any) => [
   `repo: ${obj.repo}`,
   `pluginKitVersion: ${obj.pluginKitVersion}`,
   `SettingsElement: ${obj.SettingsElement}`,
-  `icon: ${obj.icon || "icon.png"}`,
+  `icon: ${obj.icon || "logo.png"}`,
   "entry:",
   "  plugin.js:",
   "    type: main"
@@ -24,6 +25,13 @@ function ciderPluginRuntime(): Plugin {
     name: "cider-plugin-runtime",
     buildStart() {
       this.emitFile({ fileName: "plugin.yml", type: "asset", source: yaml(PluginConfig) });
+      if (fs.existsSync("logo.png")) {
+        this.emitFile({
+          fileName: "logo.png",
+          type: "asset",
+          source: fs.readFileSync("logo.png"),
+        });
+      }
     },
     configureServer(server) {
       server.middlewares.use("/plugin.js", (_req, res) => {

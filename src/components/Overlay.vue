@@ -97,7 +97,7 @@ function clearCanvasForTrackChange(reason: string) {
         canvasUrl.value = "";
       }
       fadeOldCanvasTimer = null;
-    }, 3600);
+    }, 900);
   } else {
     canvasTransitioning.value = false;
   }
@@ -109,6 +109,14 @@ function applyCachedResult(track: ReturnType<typeof getCurrentTrack>, identity: 
   if (!cached.canvasUrl) return false;
   clearFadeOldCanvasTimer();
   activeTrackIdentity = identity;
+  if (analysisCache.get(identity) === true) {
+    canvasUrl.value = cached.canvasUrl;
+    canvasActive.value = false;
+    canvasTransitioning.value = false;
+    canvasAnalysisPending.value = false;
+    canvasSuppressedForAppleArtwork.value = true;
+    return true;
+  }
   canvasUrl.value = cached.canvasUrl;
   canvasActive.value = true;
   canvasTransitioning.value = false;
@@ -290,6 +298,11 @@ async function resolveCanvas(track = getCurrentTrack(), expectedIdentity = stabl
   }
 }
 
+function safeSubscribe<T = unknown>(event: Parameters<typeof subscribeEvent<T>>[0], cb: (detail: T) => void) {
+  try { return subscribeEvent(event, cb); }
+  catch (error) { warn("Cider event subscription unavailable", { event, error: String(error) }); return () => {}; }
+}
+
 function scheduleSync() {
   if (scheduledSync !== null) return;
   scheduledSync = window.requestAnimationFrame(() => {
@@ -339,14 +352,14 @@ onMounted(() => {
   });
 
   cleanupEvents = [
-    subscribeEvent("immersive:opened", () => scheduleSync()),
-    subscribeEvent("immersive:closed", () => scheduleSync()),
-    subscribeEvent("miniplayer:opened", () => scheduleSync()),
-    subscribeEvent("miniplayer:closed", () => scheduleSync()),
-    subscribeEvent("browser:page_changed", () => scheduleSync()),
-    subscribeEvent("app:ready", () => scheduleSync()),
-    subscribeEvent("player:state_changed", () => scheduleSync()),
-    subscribeEvent("playback:state_changed", () => scheduleSync()),
+    safeSubscribe("immersive:opened", () => scheduleSync()),
+    safeSubscribe("immersive:closed", () => scheduleSync()),
+    safeSubscribe("miniplayer:opened", () => scheduleSync()),
+    safeSubscribe("miniplayer:closed", () => scheduleSync()),
+    safeSubscribe("browser:page_changed", () => scheduleSync()),
+    safeSubscribe("app:ready", () => scheduleSync()),
+    safeSubscribe("player:state_changed", () => scheduleSync()),
+    safeSubscribe("playback:state_changed", () => scheduleSync()),
   ];
 
   observer = new MutationObserver(() => scheduleSync());

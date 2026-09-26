@@ -11,4 +11,7 @@ if (deps.esbuild !== '0.28.2') throw new Error(`Expected esbuild 0.28.2, got ${d
 if (!deps.jszip) throw new Error('jszip must be declared for scripts/pack.mjs');
 if (!deps.vite) throw new Error('Vite is not declared');
 if (!String(pkg.scripts?.dev || '').includes('3058')) throw new Error('Dev script must use port 3058');
-console.log('Sanity check passed: npm registry dependencies only; esbuild 0.28.2; no pnpm dependency; Vite on port 3058.');
+if (fs.existsSync('public/icon.png')) throw new Error('public/icon.png must be removed; plugin branding uses logo.png.');
+if (fs.existsSync('public/logo.png')) throw new Error('public/logo.png placeholder must be removed; root logo.png is emitted during build.');
+if (!fs.existsSync('logo.png')) throw new Error('Root logo.png is required for plugin branding.');
+console.log('Sanity check passed: npm registry dependencies only; esbuild 0.28.2; no pnpm dependency; Vite on port 3058; branding assets verified.');

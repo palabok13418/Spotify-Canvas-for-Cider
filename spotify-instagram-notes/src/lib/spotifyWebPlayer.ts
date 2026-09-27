@@ -121,7 +121,6 @@ export function ensureSpotifyWebPlayer() {
     });
 
     concealWindow();
-    window.setTimeout(() => muteSpotifyWebPlayer(), 1500);
 
     log('Spotify Web Player background session opened', {
       concealed: true,
@@ -140,50 +139,6 @@ export function startSpotifyWebPlayerSession() {
   return Boolean(ensureSpotifyWebPlayer());
 }
 
-export function muteSpotifyWebPlayer() {
-  clearWindowReference();
-
-  if (!playerWindow || playerWindow.closed) {
-    warn('cannot mute Spotify Web Player because the background window is unavailable');
-    return false;
-  }
-
-  let hostRequestSent = false;
-
-  // Windows Cider uses WebView2. WebView2 exposes CoreWebView2.IsMuted,
-  // which mutes all audio produced by that WebView without muting the Cider
-  // application. The plugin cannot reach CoreWebView2 directly, so ask the
-  // Cider WebView2 host to apply that native mute to the named child window.
-  try {
-    const webview = (window as any).chrome?.webview;
-    if (typeof webview?.postMessage === 'function') {
-      webview.postMessage({
-        type: 'cider-spotify-notes:web-player-audio',
-        action: 'mute',
-        windowName: WINDOW_NAME,
-        origin: BASE_URL,
-      });
-      hostRequestSent = true;
-      log('requested native WebView2 mute for Spotify Web Player', {
-        windowName: WINDOW_NAME,
-      });
-    }
-  } catch (error) {
-    warn('native WebView2 mute request was unavailable', error);
-  }
-
-  try {
-    playerWindow.blur?.();
-    window.focus?.();
-  } catch {}
-
-  if (!hostRequestSent) {
-    warn('Cider native WebView2 mute bridge is not exposed; Spotify audio may remain audible');
-  }
-
-  return hostRequestSent;
-}
-
 export function playSpotifyWebTrack(uri: string, positionMs = 0) {
   const trackId = trackIdFromUri(uri);
   if (!trackId) {
@@ -200,8 +155,7 @@ export function playSpotifyWebTrack(uri: string, positionMs = 0) {
   try {
     win.location.href = trackUrl(trackId);
     concealWindow();
-    window.setTimeout(() => muteSpotifyWebPlayer(), 1800);
-
+  
     log('Spotify Web Player navigated to track', {
       trackId,
       positionMs: Math.max(0, Math.floor(positionMs)),

@@ -197,24 +197,20 @@ export async function seekSpotifyPlayback(
 }
 
 export async function muteActiveSpotifyComputer(accessToken: string): Promise<SpotifyDevice | null> {
-  const devices = await listDevices(accessToken);
+  // Spotify applies this to the currently active playback device when
+  // device_id is omitted. That is exactly the device we want to silence:
+  // the Spotify Web Player, without touching Cider's own audio.
+  await spotifyApi(
+    accessToken,
+    '/me/player/volume?volume_percent=0',
+    'PUT',
+  );
 
-  // The Spotify Web Player reports as a computer device. Prefer an active
-  // browser/web-player-looking device so we do not mute a phone or speaker.
-  const computers = devices.filter((device) => (
-    device.type.toLowerCase() === 'computer' && device.isActive
-  ));
-
-  const preferred =
-    computers.find((device) => /web player|chrome|edge|cider|browser/i.test(device.name)) ||
-    computers[0] ||
-    null;
-
-  if (!preferred) return null;
-
-  await muteSpotifyDevice(accessToken, preferred.id);
   return {
-    ...preferred,
+    id: '',
+    name: 'Active Spotify playback device',
+    type: 'Unknown',
+    isActive: true,
     volumePercent: 0,
   };
 }

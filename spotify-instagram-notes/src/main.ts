@@ -6,8 +6,15 @@ import {
   definePluginContext,
 } from './pluginkit';
 import SpotifyNotesPanel from './components/SpotifyNotesPanel.vue';
+import SpotifyLoginModal from './components/SpotifyLoginModal.vue';
 import PluginConfig from './plugin.config';
-import { handleOAuthMessage, isEnabled, setEnabled, startBridge } from './lib/sync';
+import {
+  handleOAuthMessage,
+  isEnabled,
+  setEnabled,
+  setSpotifyLoginPromptHandler,
+  startBridge,
+} from './lib/sync';
 import { MUS_API_BASE } from './lib/musApi';
 
 const PREFIX = '[Spotify Notes Bridge]';
@@ -18,10 +25,84 @@ console.info(PREFIX, 'plugin entry loaded', {
 });
 
 const PanelElement = defineCustomElement(SpotifyNotesPanel, { shadowRoot: false });
+const LoginModalElement = defineCustomElement(SpotifyLoginModal, { shadowRoot: false });
 
 export const CustomElements = {
   'spotify-notes-panel': PanelElement,
+  'spotify-notes-login-modal': LoginModalElement,
 };
+
+let closeSpotifyLoginModal: (() => void) | null = null;
+let spotifyLoginPopup: Window | null = null;
+let spotifyLoginModalOpen = false;
+
+function openSpotifyLoginModal() {
+  if (spotifyLoginModalOpen) return true;
+
+  const { openDialog, closeDialog, dialogElement } = createModal({
+    escClose: true,
+    noDefaultClass: true,
+  });
+
+  const element = document.createElement(customElementName('spotify-notes-login-modal'));
+  element.addEventListener('spotify-login-start', () => {
+    launchSpotifyOAuthLogin();
+  });
+  element.addEventListener('spotify-login-cancel', () => {
+    closeDialog();
+    closeSpotifyLoginModal = null;
+    spotifyLoginModalOpen = false;
+  });
+
+  dialogElement.appendChild(element);
+  spotifyLoginModalOpen = true;
+  closeSpotifyLoginModal = () => {
+    try {
+      closeDialog();
+    } catch {}
+    closeSpotifyLoginModal = null;
+    spotifyLoginModalOpen = false;
+  };
+
+  openDialog();
+  return true;
+}
+
+function launchSpotifyOAuthLogin() {
+  const musApiOrigin = new URL(MUS_API_BASE).origin;
+  const url = new URL('/api/spotify/auth', MUS_API_BASE);
+  url.searchParams.set('origin', window.location.origin === 'null' ? '*' : window.location.origin);
+  url.searchParams.set('returnTo', window.location.href);
+  url.searchParams.set('reason', 'first-run-mirroring');
+
+  if (spotifyLoginPopup && !spotifyLoginPopup.closed) {
+    try {
+      spotifyLoginPopup.focus();
+    } catch {}
+    return true;
+  }
+
+  const popup = window.open(
+    url.toString(),
+    'musapi-spotify-auth',
+    'width=520,height=760,resizable=yes,scrollbars=yes'
+  );
+
+  if (!popup) {
+    console.error(PREFIX, 'Spotify login popup was blocked by the host', {
+      code: 'SPOTIFY_LOGIN_POPUP_BLOCKED',
+      musApiOrigin,
+    });
+    return false;
+  }
+
+  spotifyLoginPopup = popup;
+  console.info(PREFIX, 'Spotify OAuth login page opened', {
+    provider: 'Spotify',
+    secureFlow: 'oauth',
+  });
+  return true;
+}
 
 function openPanel(customElementName: (name: string) => string) {
   const { openDialog, dialogElement } = createModal({ escClose: true });
@@ -251,6 +332,8 @@ const { plugin, customElementName } = definePluginContext({
     console.info(PREFIX, 'main menu entry registered');
     registerSpotifyMirroringButton();
 
+    setSpotifyLoginPromptHandler(() => openSpotifyLoginModal());
+
     const musApiOrigin = new URL(MUS_API_BASE).origin;
 
     window.addEventListener('message', (event) => {
@@ -258,6 +341,8 @@ const { plugin, customElementName } = definePluginContext({
       if (event.data?.type !== 'musaudio_spotify_oauth') return;
 
       console.info(PREFIX, 'accepted Spotify OAuth callback message from Mus-API');
+      closeSpotifyLoginModal?.();
+      spotifyLoginPopup = null;
       handleOAuthMessage(event.data.data);
     });
 

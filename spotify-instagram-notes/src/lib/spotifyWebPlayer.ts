@@ -310,8 +310,8 @@ export async function playSpotifyWebTrack(uri: string, positionMs = 0) {
   const ready = await createPlayer();
   if (!ready || !player || !deviceId) return false;
 
-  const token = await getAccessToken();
-  if (!token) return false;
+  const auth = loadAuth();
+  if (!auth?.sessionTicket) return false;
 
   currentTrackId = trackId;
   currentPlaying = true;
@@ -322,11 +322,19 @@ export async function playSpotifyWebTrack(uri: string, positionMs = 0) {
     await player.setVolume(0);
 
     const started = await spotifyPlayOnDevice(
-      token,
+      auth.sessionTicket,
       deviceId,
       uri,
       Math.max(0, Math.floor(positionMs)),
     );
+
+    if (started?.sessionTicket && started.sessionTicket !== auth.sessionTicket) {
+      saveAuth({
+        sessionTicket: started.sessionTicket,
+        scope: auth.scope,
+        savedAt: Date.now(),
+      });
+    }
 
     if (!started) {
       warn('Spotify refused playback on the headless SDK device', {

@@ -769,7 +769,7 @@ async function syncOnce() {
 
       emit({
         status: 'ready',
-        message: 'Mirroring playback and correcting Spotify timestamp drift through SpotAPI.',
+        message: 'Mirroring playback and correcting the background Spotify playback clock.',
         ciderTitle: cider.title,
         ciderArtist: cider.artist,
         spotifyTrack: currentResolvedTrack,
@@ -782,7 +782,7 @@ async function syncOnce() {
       emit({
         status: playerState.available ? 'ready' : 'spotify-required',
         message: playerState.available
-          ? 'Spotify Web Player background session is active; SpotAPI timestamp sync is enabled.'
+          ? 'Spotify Web Player background session is active; playback clock sync is enabled.'
           : 'Spotify Web Player background session is unavailable.',
         ciderTitle: cider.title,
         ciderArtist: cider.artist,
@@ -961,7 +961,7 @@ export function handleOAuthMessage(data: any) {
     return false;
   }
 
-  log('Spotify OAuth callback received a secure login ticket', {
+  log('Spotify OAuth callback received a secure encrypted login ticket', {
     authenticated: true,
     hasLoginTicket: true,
     ticketForwardedToMusApi: true,
@@ -997,7 +997,7 @@ export function handleOAuthMessage(data: any) {
         saveAuth({
           refreshToken: session.refreshToken,
           savedAt: Date.now(),
-          scope: undefined,
+          scope: typeof data?.scope === 'string' ? data.scope : undefined,
         });
       }
 

@@ -1,4 +1,4 @@
-import { loadAuth } from './storage';
+import { loadAuth, saveAuth } from './storage';
 import { refreshSpotifyToken, spotifyPlayOnDevice } from './musApi';
 
 const PREFIX = '[Spotify Notes Bridge]';
@@ -57,7 +57,7 @@ function warn(message: string, details?: unknown) {
 
 async function getAccessToken(forceRefresh = false) {
   const auth = loadAuth();
-  if (!auth?.refreshToken) return null;
+  if (!auth?.sessionTicket) return null;
 
   const now = Date.now();
 
@@ -66,9 +66,17 @@ async function getAccessToken(forceRefresh = false) {
   }
 
   try {
-    const token = await refreshSpotifyToken(auth.refreshToken);
+    const token = await refreshSpotifyToken(auth.sessionTicket);
     accessToken = token.accessToken;
     accessTokenExpiresAt = Number(token.tokenExpMs) || now + 3_300_000;
+
+    if (token.sessionTicket && token.sessionTicket !== auth.sessionTicket) {
+      saveAuth({
+        sessionTicket: token.sessionTicket,
+        scope: auth.scope,
+        savedAt: Date.now(),
+      });
+    }
     return accessToken;
   } catch (error) {
     warn('could not refresh Spotify Web Playback SDK token', error);

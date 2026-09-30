@@ -44,6 +44,11 @@ function openSpotifyLoginModal() {
     noDefaultClass: true,
   });
 
+  dialogElement.addEventListener('close', () => {
+    closeSpotifyLoginModal = null;
+    spotifyLoginModalOpen = false;
+  }, { once: true });
+
   const element = document.createElement(customElementName('spotify-notes-login-modal'));
   element.addEventListener('spotify-login-start', () => {
     launchSpotifyOAuthLogin();
@@ -314,8 +319,12 @@ const { plugin, customElementName } = definePluginContext({
       if (event.data?.type !== 'musaudio_spotify_oauth') return;
 
       console.info(PREFIX, 'accepted Spotify OAuth callback message from Mus-API');
-      closeSpotifyLoginModal?.();
       spotifyLoginPopup = null;
+
+      if (event.data?.data?.ok) {
+        closeSpotifyLoginModal?.();
+      }
+
       handleOAuthMessage(event.data.data);
     });
 

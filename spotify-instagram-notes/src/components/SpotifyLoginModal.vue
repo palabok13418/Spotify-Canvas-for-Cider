@@ -30,10 +30,10 @@ function cancel() {
       <h2 id="spotify-login-title">Sign in to Spotify</h2>
       <p>
         Spotify login is required before the background mirroring service can
-        start. Your account is authenticated through Spotify's own sign-in flow.
+        start. The actual sign-in happens on Spotify's secure authentication page.
       </p>
       <p class="privacy">
-        Your Spotify password is entered only on Spotify's authentication page.
+        This bridge never asks for or stores your Spotify password.
         Mus-API receives the OAuth result and the plugin stores only the
         resulting session token needed to keep the connection alive.
       </p>

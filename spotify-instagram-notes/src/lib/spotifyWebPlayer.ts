@@ -43,6 +43,7 @@ let lastState: any = null;
 let accessToken = '';
 let accessTokenExpiresAt = 0;
 let hostElement: HTMLDivElement | null = null;
+let readyPromise: Promise<boolean> | null = null;
 
 function log(message: string, details?: unknown) {
   if (details === undefined) console.info(PREFIX, message);
@@ -166,17 +167,39 @@ function loadSdk() {
 }
 
 async function waitForPlayerReady() {
-  if (!player || connected) return Boolean(player && deviceId);
+  if (!player) return false;
+  if (deviceId && connected) return true;
+
+  if (!readyPromise) {
+    readyPromise = new Promise<boolean>((resolve) => {
+      const timeout = window.setTimeout(() => {
+        readyPromise = null;
+        resolve(Boolean(deviceId && connected));
+      }, 15_000);
+
+      const originalReady = (currentDeviceId: string) => {
+        if (!currentDeviceId) return;
+        window.clearTimeout(timeout);
+        readyPromise = null;
+        resolve(true);
+      };
+
+      (player as any).__ciderResolveReady = originalReady;
+    });
+  }
 
   const connectedResult = await player.connect();
   connected = Boolean(connectedResult);
 
   if (!connected) {
+    readyPromise = null;
     warn('Spotify Web Playback SDK failed to connect');
     return false;
   }
 
-  return Boolean(deviceId);
+  if (deviceId) return true;
+
+  return readyPromise;
 }
 
 async function createPlayer() {
@@ -211,6 +234,11 @@ async function createPlayer() {
     connected = true;
 
     void player?.setVolume(0).catch(() => undefined);
+    const resolveReady = (player as any).__ciderResolveReady;
+    if (typeof resolveReady === 'function') {
+      delete (player as any).__ciderResolveReady;
+      resolveReady(deviceId);
+    }
 
     log('headless Spotify player is ready', {
       deviceId,
@@ -392,6 +420,7 @@ export function stopSpotifyWebPlayerSession() {
   player = null;
   connected = false;
   deviceId = '';
+  readyPromise = null;
   currentTrackId = '';
   currentPlaying = false;
   lastState = null;

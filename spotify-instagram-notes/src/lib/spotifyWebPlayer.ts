@@ -315,6 +315,18 @@ export async function playSpotifyWebTrack(uri: string, positionMs = 0) {
   }
 }
 
+export async function muteSpotifyWebPlayer() {
+  if (!player) return false;
+
+  try {
+    await player.setVolume(0);
+    return true;
+  } catch (error) {
+    warn('failed to mute headless Spotify player', error);
+    return false;
+  }
+}
+
 export async function pauseSpotifyWebPlayer() {
   if (!player) {
     currentPlaying = false;

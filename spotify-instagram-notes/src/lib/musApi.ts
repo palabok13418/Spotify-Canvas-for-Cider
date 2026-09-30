@@ -57,6 +57,55 @@ export async function spotApiPlayer<T = any>(action: string, body: Record<string
   });
 }
 
+export interface SpotifyToken {
+  accessToken: string;
+  refreshToken: string | null;
+  tokenExpMs: number;
+  scope?: string | null;
+}
+
+export async function refreshSpotifyToken(refreshToken: string): Promise<SpotifyToken> {
+  const data = await postJson<{
+    ok: boolean;
+    accessToken?: string;
+    refreshToken?: string | null;
+    tokenExpMs?: number;
+    scope?: string | null;
+  }>('/api/spotify/refresh', { refreshToken });
+
+  if (!data.ok || !data.accessToken) {
+    throw new Error('Spotify token refresh failed');
+  }
+
+  return {
+    accessToken: String(data.accessToken),
+    refreshToken: data.refreshToken ?? refreshToken,
+    tokenExpMs: Number(data.tokenExpMs) || Date.now() + 3_300_000,
+    scope: data.scope ?? null,
+  };
+}
+
+export async function spotifyPlayOnDevice(
+  accessToken: string,
+  deviceId: string,
+  uri: string,
+  positionMs = 0,
+) {
+  return postJson<{
+    ok: boolean;
+    data?: unknown;
+  }>('/api/spotify/proxy', {
+    targetUrl:
+      `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`,
+    method: 'PUT',
+    accessToken,
+    body: {
+      uris: [uri],
+      position_ms: Math.max(0, Math.floor(positionMs)),
+    },
+  });
+}
+
 export async function muteSpotifyWebPlayer() {
   return spotApiPlayer<{
     ok: boolean;

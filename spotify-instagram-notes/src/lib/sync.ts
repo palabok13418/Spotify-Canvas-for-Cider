@@ -2,6 +2,7 @@ import { clearAuth, loadAuth, saveAuth } from './storage';
 import {
   getSpotifySession,
   resolveSpotifyTrack,
+  MUS_API_BASE,
   type SpotifyTrack
 } from './musApi';
 import {

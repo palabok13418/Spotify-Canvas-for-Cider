@@ -174,10 +174,24 @@ async function ensureSpotifyLinked() {
 
       authValidated = true;
       authValidatedAt = Date.now();
+
       log('Spotify user authentication detected', {
         authenticated: true,
+        userIdPresent: Boolean(session.user?.id),
         product: session.product || null,
       });
+
+      // Do not create/connect the hidden Spotify player until the Mus-API
+      // session has been positively validated for this user.
+      const playerReady = await startSpotifyWebPlayerSession();
+      if (!playerReady) {
+        warn('Spotify user is authenticated, but the background Web Player could not be started', {
+          code: 'SPOTIFY_BACKGROUND_PLAYER_UNAVAILABLE',
+        });
+      } else {
+        log('validated Spotify session is now attached to the background player');
+      }
+
       return true;
     } catch (error: any) {
       const status = Number(error?.status || 0);
@@ -884,12 +898,25 @@ export function startBridge() {
     startedAt: Date.now(),
   };
 
+  const hasStoredAuth = Boolean(loadAuth());
+
   log('bridge starting', {
     enabled,
-    hasStoredAuth: Boolean(loadAuth()),
+    hasStoredAuth,
     musApiBase: MUS_API_BASE,
     syncIntervalMs: 1200,
   });
+
+  if (!hasStoredAuth) {
+    errorLog('Spotify user is not logged in; mirroring will remain blocked until the in-app Spotify login succeeds', {
+      code: 'SPOTIFY_USER_NOT_AUTHENTICATED',
+      action: 'OPEN_IN_APP_LOGIN',
+    });
+    emit({
+      status: 'link-required',
+      message: 'Spotify login is required before mirroring can start.',
+    });
+  }
 
   void ensureSpotifyLinked();
 
@@ -926,6 +953,7 @@ export function handleOAuthMessage(data: any) {
   }
 
   log('Spotify OAuth callback received', {
+    authenticated: Boolean(data.refreshToken),
     hasRefreshToken: Boolean(data.refreshToken),
     tokenExpMs: Number(data.tokenExpMs) || null,
   });

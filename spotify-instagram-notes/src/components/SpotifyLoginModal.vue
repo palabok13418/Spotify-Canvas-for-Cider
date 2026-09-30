@@ -1,5 +1,10 @@
 <script setup lang="ts">
+let opening = false;
+
 function startLogin() {
+  if (opening) return;
+  opening = true;
+
   globalThis.dispatchEvent(
     new CustomEvent('spotify-login-start', {
       bubbles: true,
@@ -22,20 +27,26 @@ function cancel() {
   <div class="login-shell" role="dialog" aria-labelledby="spotify-login-title">
     <div class="glass">
       <div class="eyebrow">SPOTIFY NOTES BRIDGE</div>
-      <h2 id="spotify-login-title">Spotify sign-in required</h2>
+      <h2 id="spotify-login-title">Sign in to Spotify</h2>
       <p>
-        A Spotify user session was not detected. Continue to Spotify's official
-        sign-in page to link this Cider plugin.
+        Spotify login is required before the background mirroring service can
+        start. Your account is authenticated through Spotify's own sign-in flow.
       </p>
       <p class="privacy">
-        Your Spotify password stays with Spotify. Mus-API receives the OAuth
-        authorization result, not your password.
+        Your Spotify password is entered only on Spotify's authentication page.
+        Mus-API receives the OAuth result and the plugin stores only the
+        resulting session token needed to keep the connection alive.
       </p>
+
+      <div class="secure-row" aria-label="Secure authentication">
+        <span class="secure-dot" aria-hidden="true"></span>
+        <span>Spotify authentication · secure handoff</span>
+      </div>
 
       <div class="actions">
         <button class="secondary" type="button" @click="cancel">Not now</button>
-        <button class="primary" type="button" @click="startLogin">
-          Continue with Spotify
+        <button class="primary" type="button" :disabled="opening" @click="startLogin">
+          {{ opening ? 'Opening Spotify…' : 'Continue with Spotify' }}
         </button>
       </div>
     </div>
@@ -94,6 +105,28 @@ p {
   font-size: 11px;
 }
 
+.secure-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 16px;
+  padding: 9px 11px;
+  border-radius: 12px;
+  background: rgba(255,255,255,.06);
+  border: 1px solid rgba(255,255,255,.08);
+  color: rgba(255,255,255,.66);
+  font-size: 10px;
+  letter-spacing: .02em;
+}
+
+.secure-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: currentColor;
+  box-shadow: 0 0 12px currentColor;
+}
+
 .actions {
   display: flex;
   justify-content: flex-end;
@@ -114,6 +147,11 @@ button {
 .primary {
   color: #07130b;
   background: rgba(255,255,255,.94);
+}
+
+.primary:disabled {
+  opacity: .65;
+  cursor: wait;
 }
 
 .secondary {

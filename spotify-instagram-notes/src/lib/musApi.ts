@@ -10,7 +10,7 @@ export interface SpotifyTrack {
 }
 
 export interface SpotifySession {
-  refreshToken: string | null;
+  sessionTicket: string | null;
   user: {
     id: string;
     displayName: string;
@@ -27,6 +27,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     },
     body: JSON.stringify(body),
     cache: 'no-store',
+    credentials: 'omit',
   });
 
   const data = await response.json().catch(() => null);
@@ -47,15 +48,15 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
   return data as T;
 }
 
-export async function getSpotifySession(refreshToken: string): Promise<SpotifySession> {
-  return validateSpotifySession({ refreshToken });
+export async function getSpotifySession(sessionTicket: string): Promise<SpotifySession> {
+  return validateSpotifySession({ sessionTicket });
 }
 
 export async function completeSpotifyLogin(loginTicket: string): Promise<SpotifySession> {
   const data = await validateSpotifySession({ loginTicket });
 
-  if (!data.refreshToken) {
-    const error: any = new Error('Spotify login completed without a refresh session');
+  if (!data.sessionTicket) {
+    const error: any = new Error('Spotify login completed without a secure session ticket');
     error.code = 'SPOTIFY_AUTH_SESSION_EMPTY';
     error.status = 502;
     throw error;
@@ -64,13 +65,18 @@ export async function completeSpotifyLogin(loginTicket: string): Promise<Spotify
   return data;
 }
 
+export async function migrateLegacySpotifySession(refreshToken: string): Promise<SpotifySession> {
+  return validateSpotifySession({ refreshToken });
+}
+
 async function validateSpotifySession(body: {
-  refreshToken?: string;
+  sessionTicket?: string;
   loginTicket?: string;
+  refreshToken?: string;
 }): Promise<SpotifySession> {
   const data = await postJson<{
     ok: boolean;
-    refreshToken?: string | null;
+    sessionTicket?: string | null;
     user?: {
       id?: string;
       displayName?: string;
@@ -78,7 +84,7 @@ async function validateSpotifySession(body: {
     product?: string | null;
   }>('/api/spotify/session', body);
 
-  if (!data.ok || !data.user?.id) {
+  if (!data.ok || !data.user?.id || !data.sessionTicket) {
     const error: any = new Error('Spotify login session could not be validated');
     error.code = 'SPOTIFY_AUTH_INVALID';
     error.status = 401;
@@ -86,7 +92,7 @@ async function validateSpotifySession(body: {
   }
 
   return {
-    refreshToken: data.refreshToken ?? null,
+    sessionTicket: String(data.sessionTicket),
     user: {
       id: String(data.user.id),
       displayName: String(data.user.displayName || ''),
@@ -97,27 +103,30 @@ async function validateSpotifySession(body: {
 
 export interface SpotifyToken {
   accessToken: string;
-  refreshToken: string | null;
+  sessionTicket?: string | null;
   tokenExpMs: number;
   scope?: string | null;
 }
 
-export async function refreshSpotifyToken(refreshToken: string): Promise<SpotifyToken> {
+export async function refreshSpotifyToken(sessionTicket: string): Promise<SpotifyToken> {
   const data = await postJson<{
     ok: boolean;
     accessToken?: string;
-    refreshToken?: string | null;
+    sessionTicket?: string | null;
     tokenExpMs?: number;
     scope?: string | null;
-  }>('/api/spotify/refresh', { refreshToken });
+  }>('/api/spotify/refresh', { sessionTicket });
 
   if (!data.ok || !data.accessToken) {
-    throw new Error('Spotify token refresh failed');
+    const error: any = new Error('Spotify token refresh failed');
+    error.code = data?.error || 'SPOTIFY_TOKEN_REFRESH_FAILED';
+    error.status = 401;
+    throw error;
   }
 
   return {
     accessToken: String(data.accessToken),
-    refreshToken: data.refreshToken ?? refreshToken,
+    sessionTicket: data.sessionTicket ?? sessionTicket,
     tokenExpMs: Number(data.tokenExpMs) || Date.now() + 3_300_000,
     scope: data.scope ?? null,
   };
@@ -160,7 +169,8 @@ export async function resolveSpotifyTrack(input: {
 
   const response = await fetch(url.toString(), {
     method: 'GET',
-    cache: 'no-store'
+    cache: 'no-store',
+    credentials: 'omit'
   });
 
   const data = await response.json().catch(() => null);
@@ -168,7 +178,6 @@ export async function resolveSpotifyTrack(input: {
   if (!response.ok) {
     const error: any = new Error(
       String(
-        data?.detail ||
         data?.error ||
         `Mus-API resolver returned ${response.status}`
       )

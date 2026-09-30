@@ -102,9 +102,10 @@ function launchSpotifyOAuthLogin() {
   }
 
   spotifyLoginPopup = popup;
-  console.info(PREFIX, 'Spotify OAuth login page opened', {
+  console.info(PREFIX, 'Spotify sign-in handoff opened from the in-app Liquid Glass prompt', {
     provider: 'Spotify',
     secureFlow: 'oauth',
+    credentialsStayWithProvider: true,
   });
   return true;
 }
@@ -329,7 +330,7 @@ const { plugin, customElementName } = definePluginContext({
     });
 
     // The bridge starts when the plugin loads. The panel is only a control surface.
-    console.info(PREFIX, 'starting playback mirror bridge');
+    console.info(PREFIX, 'starting playback mirror bridge behind authentication gate');
     startBridge();
   },
 });

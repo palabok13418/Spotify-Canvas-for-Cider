@@ -133,23 +133,19 @@ export async function refreshSpotifyToken(sessionTicket: string): Promise<Spotif
 }
 
 export async function spotifyPlayOnDevice(
-  accessToken: string,
+  sessionTicket: string,
   deviceId: string,
   uri: string,
   positionMs = 0,
 ) {
   return postJson<{
     ok: boolean;
-    data?: unknown;
-  }>('/api/spotify/proxy', {
-    targetUrl:
-      `https://api.spotify.com/v1/me/player/play?device_id=${encodeURIComponent(deviceId)}`,
-    method: 'PUT',
-    accessToken,
-    body: {
-      uris: [uri],
-      position_ms: Math.max(0, Math.floor(positionMs)),
-    },
+    sessionTicket?: string | null;
+  }>('/api/spotify/play', {
+    sessionTicket,
+    deviceId,
+    uri,
+    positionMs: Math.max(0, Math.floor(positionMs)),
   });
 }
 

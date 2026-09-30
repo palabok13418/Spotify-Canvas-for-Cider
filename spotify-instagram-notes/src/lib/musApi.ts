@@ -9,55 +9,6 @@ export interface SpotifyTrack {
   durationMs?: number;
 }
 
-export interface SpotApiPlaybackState {
-  activeDeviceId: string | null;
-  deviceId: string | null;
-  deviceName: string | null;
-  deviceType: string | null;
-  isPlaying: boolean;
-  isPaused: boolean;
-  progressMs: number | null;
-  timestampMs: number | null;
-  trackUri: string | null;
-  durationMs: number | null;
-}
-
-async function postJson<T>(path: string, body: unknown): Promise<T> {
-  const response = await fetch(`${MUS_API_BASE}${path}`, {
-    method: 'POST',
-    headers: {
-      'content-type': 'application/json'
-    },
-    body: JSON.stringify(body)
-  });
-
-  const data = await response.json().catch(() => null);
-
-  if (!response.ok || data?.ok === false) {
-    const error: any = new Error(
-      String(
-        data?.detail ||
-        data?.error ||
-        `Mus-API returned ${response.status}`
-      )
-    );
-    error.status = response.status || Number(data?.status) || 502;
-    error.code = data?.error || 'MUS_API_ERROR';
-    error.detail = data?.extra || data?.detail || null;
-    throw error;
-  }
-
-  return data as T;
-}
-
-export async function spotApiPlayer<T = any>(action: string, body: Record<string, unknown> = {}) {
-  return postJson<T>('/api/spotify/spotapi-player', {
-    ...body,
-    action
-  });
-}
-
-
 export interface SpotifySession {
   refreshToken: string | null;
   user: {
@@ -68,6 +19,26 @@ export interface SpotifySession {
 }
 
 export async function getSpotifySession(refreshToken: string): Promise<SpotifySession> {
+  return validateSpotifySession({ refreshToken });
+}
+
+export async function completeSpotifyLogin(loginTicket: string): Promise<SpotifySession> {
+  const data = await validateSpotifySession({ loginTicket });
+
+  if (!data.refreshToken) {
+    const error: any = new Error('Spotify login completed without a refresh session');
+    error.code = 'SPOTIFY_AUTH_SESSION_EMPTY';
+    error.status = 502;
+    throw error;
+  }
+
+  return data;
+}
+
+async function validateSpotifySession(body: {
+  refreshToken?: string;
+  loginTicket?: string;
+}): Promise<SpotifySession> {
   const data = await postJson<{
     ok: boolean;
     refreshToken?: string | null;
@@ -76,9 +47,7 @@ export async function getSpotifySession(refreshToken: string): Promise<SpotifySe
       displayName?: string;
     };
     product?: string | null;
-  }>('/api/spotify/session', {
-    refreshToken,
-  });
+  }>('/api/spotify/session', body);
 
   if (!data.ok || !data.user?.id) {
     const error: any = new Error('Spotify login session could not be validated');

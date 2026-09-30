@@ -1,17 +1,17 @@
 import { loadAuth, saveAuth } from './storage';
 import {
-  getSpotifyPlaybackState,
-  muteSpotifyWebPlayer,
   resolveSpotifyTrack,
-  seekSpotifyPlayback,
   MUS_API_BASE,
   type SpotifyTrack
 } from './musApi';
 import {
   ensureSpotifyWebPlayer,
+  getSpotifyWebPlayerPlaybackState,
   getSpotifyWebPlayerState,
+  muteSpotifyWebPlayer,
   pauseSpotifyWebPlayer,
   playSpotifyWebTrack,
+  seekSpotifyWebPlayer,
   startSpotifyWebPlayerSession,
   stopSpotifyWebPlayerSession,
 } from './spotifyWebPlayer';
@@ -107,7 +107,7 @@ export function setEnabled(value: boolean) {
   }
 
   muteGeneration++;
-  pauseSpotifyWebPlayer();
+  void pauseSpotifyWebPlayer();
   emit({ status: 'disabled', message: 'Spotify mirroring is paused.' });
 }
 
@@ -360,9 +360,9 @@ async function findSpotifyTrack(cider: {
   }
 }
 async function automaticallyMuteSpotifyWebPlayer(reason: string) {
-  const now = Date.now();
-
   if (!enabled || !lastSpotifyUri || !lastPlaying) return;
+
+  const now = Date.now();
 
   if (
     lastDeviceMuteTrack === lastSpotifyUri &&
@@ -374,22 +374,12 @@ async function automaticallyMuteSpotifyWebPlayer(reason: string) {
   lastDeviceMuteTrack = lastSpotifyUri;
   lastDeviceMuteAt = now;
 
-  try {
-    const result = await muteSpotifyWebPlayer();
+  const muted = await muteSpotifyWebPlayer();
 
-    log('automatically muted Spotify Web Player through SpotAPI private Connect-State', {
+  if (muted) {
+    log('automatically muted headless Spotify player', {
       reason,
-      deviceName: result?.deviceName || null,
-      deviceId: result?.deviceId || null,
-      volume: Number(result?.volume) || 0,
-    });
-  } catch (error: any) {
-    warn('SpotAPI automatic Spotify Web Player mute failed', {
-      reason,
-      status: Number(error?.status) || 0,
-      code: String(error?.code || ''),
-      message: String(error?.message || error || 'unknown error'),
-      detail: error?.detail || null,
+      deviceId: getSpotifyWebPlayerState().deviceId,
     });
   }
 }
@@ -398,36 +388,41 @@ async function syncSpotifyClock(reason: string, force = false) {
   const now = Date.now();
 
   if (!enabled || !lastPlaying || !lastSpotifyUri) return;
-  if (!force && now - lastSpotifyClockCheckAt < 2_500) return;
+  if (!force && now - lastSpotifyClockCheckAt < 1_500) return;
   if (!force && now < spotifyClockRetryUnavailableUntil) return;
 
   lastSpotifyClockCheckAt = now;
 
-  const requestStartedAt = Date.now();
-
   try {
-    const state = await getSpotifyPlaybackState();
+    const state = await getSpotifyWebPlayerPlaybackState();
     const observedAt = Date.now();
 
-    if (!state || !state.trackUri || state.trackUri !== lastSpotifyUri) {
-      log('SpotAPI clock is waiting for the mirrored track to become active', {
+    if (!state) {
+      log('headless Spotify player state is not available yet', { reason });
+      return;
+    }
+
+    const currentUri = String(
+      state?.track_window?.current_track?.uri ||
+      state?.track_window?.current_track?.id ||
+      ''
+    ).trim();
+
+    if (!currentUri || (currentUri !== lastSpotifyUri && !currentUri.endsWith(lastSpotifyUri))) {
+      log('headless Spotify player is on a different track; waiting', {
         reason,
-        spotifyTrackUri: state?.trackUri || null,
+        spotifyTrackUri: currentUri || null,
         expectedTrackUri: lastSpotifyUri,
-        deviceName: state?.deviceName || null,
       });
       return;
     }
 
-    if (!state.isPlaying || state.progressMs == null) {
-      log('SpotAPI clock is waiting for private playback to start', {
-        reason,
-        deviceName: state.deviceName,
-      });
-      return;
-    }
+    const rawPosition = Number(state?.position);
+    if (!Number.isFinite(rawPosition)) return;
 
-    const spotifyNowMs = Math.max(0, Math.floor(state.progressMs));
+    const spotifyNowMs =
+      rawPosition +
+      (!state.paused ? Math.max(0, observedAt - Number(state.timestamp || observedAt)) : 0);
 
     const ciderNowMs =
       lastCiderPositionMs +
@@ -437,52 +432,37 @@ async function syncSpotifyClock(reason: string, force = false) {
 
     const driftMs = spotifyNowMs - ciderNowMs;
 
-    log('SpotAPI playback clock comparison', {
+    log('headless Spotify playback clock comparison', {
       reason,
       ciderMs: Math.floor(ciderNowMs),
-      spotifyMs: spotifyNowMs,
+      spotifyMs: Math.floor(spotifyNowMs),
       driftMs: Math.floor(driftMs),
-      deviceName: state.deviceName,
+      deviceId: getSpotifyWebPlayerState().deviceId,
     });
 
-    if (Math.abs(driftMs) < 700) return;
+    if (Math.abs(driftMs) < 500) return;
 
-    const halfRtt = Math.min(
-      300,
-      Math.max(0, (observedAt - requestStartedAt) / 2)
-    );
+    const targetMs = Math.max(0, Math.floor(ciderNowMs));
 
-    const targetMs = Math.max(
-      0,
-      Math.floor(ciderNowMs + halfRtt)
-    );
-
-    await seekSpotifyPlayback(targetMs);
+    await seekSpotifyWebPlayer(targetMs);
 
     lastPositionSyncAt = observedAt;
 
-    log('corrected Spotify playback clock through SpotAPI private Connect-State', {
+    // The SDK player is permanently muted. Re-assert after a seek because
+    // playback state can reconnect/reset the local volume.
+    await muteSpotifyWebPlayer();
+
+    log('corrected headless Spotify playback clock', {
       reason,
       targetMs,
-      previousSpotifyMs: spotifyNowMs,
-      ciderMs: Math.floor(ciderNowMs),
       driftMs: Math.floor(driftMs),
-      deviceName: state.deviceName,
     });
   } catch (error: any) {
-    const status = Number(error?.status) || 0;
-
-    if (status === 429 || status === 503 || status === 504) {
-      spotifyClockRetryUnavailableUntil =
-        now + (status === 429 ? 30_000 : 10_000);
-    }
-
-    warn('SpotAPI playback clock sync failed', {
+    warn('headless Spotify playback clock sync failed', {
       reason,
-      status,
-      code: String(error?.code || ''),
+      status: Number(error?.status) || 0,
       message: String(error?.message || error || 'unknown error'),
-      detail: error?.detail || null,
+      code: String(error?.code || ''),
     });
   }
 }
@@ -582,10 +562,10 @@ async function syncOnce() {
       lastSpotifyUri = currentResolvedTrack.uri;
       lastPlaying = cider.playing;
 
-      ensureSpotifyWebPlayer();
+      void ensureSpotifyWebPlayer();
 
       if (!cider.playing) {
-        pauseSpotifyWebPlayer();
+        await pauseSpotifyWebPlayer();
         emit({
           status: 'ready',
           message: `Matched “${currentResolvedTrack.name}”. Cider is paused.`,
@@ -643,7 +623,7 @@ async function syncOnce() {
           return;
         }
 
-        const started = playSpotifyWebTrack(
+        const started = await playSpotifyWebTrack(
           lastSpotifyUri,
           cider.positionMs
         );

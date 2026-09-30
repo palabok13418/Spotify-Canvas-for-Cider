@@ -2,7 +2,6 @@ import { clearAuth, loadAuth, saveAuth } from './storage';
 import {
   getSpotifySession,
   resolveSpotifyTrack,
-  MUS_API_BASE,
   type SpotifyTrack
 } from './musApi';
 import {
@@ -54,7 +53,9 @@ let busy = false;
 let timer = 0;
 let eventListenersInstalled = false;
 let authValidated = false;
+let authValidatedAt = 0;
 let authValidationPromise: Promise<boolean> | null = null;
+const AUTH_VALIDATION_TTL_MS = 5 * 60 * 1000;
 let loginPromptHandler: (() => boolean | void) | null = null;
 let lastLoginPromptAt = 0;
 let lastAuthErrorAt = 0;
@@ -136,7 +137,11 @@ function emit(snapshot: BridgeSnapshot) {
 
 async function ensureSpotifyLinked() {
   if (!enabled) return false;
-  if (authValidated && loadAuth()) return true;
+  if (
+    authValidated &&
+    loadAuth() &&
+    Date.now() - authValidatedAt < AUTH_VALIDATION_TTL_MS
+  ) return true;
 
   if (authValidationPromise) return authValidationPromise;
 
@@ -166,6 +171,7 @@ async function ensureSpotifyLinked() {
       }
 
       authValidated = true;
+      authValidatedAt = Date.now();
       log('Spotify user authentication detected', {
         authenticated: true,
         product: session.product || null,
@@ -177,6 +183,7 @@ async function ensureSpotifyLinked() {
 
       if (status === 401 || code === 'SPOTIFY_AUTH_INVALID') {
         authValidated = false;
+        authValidatedAt = 0;
         clearAuth();
         reportSpotifyUnauthenticated('stored-session-invalid', {
           status,
@@ -937,7 +944,8 @@ export function handleOAuthMessage(data: any) {
   lastCiderPositionMs = 0;
   lastObservedAt = 0;
 
-  authValidated = Boolean(data.refreshToken);
+  authValidated = false;
+  authValidatedAt = 0;
   lastLoginPromptAt = 0;
   lastAuthErrorAt = 0;
 
@@ -946,14 +954,19 @@ export function handleOAuthMessage(data: any) {
   lastDeviceMuteTrack = '';
   lastDeviceMuteAt = 0;
 
-  startSpotifyWebPlayerSession();
+  void ensureSpotifyLinked().then((valid) => {
+    if (!valid || !enabled) return;
 
-  emit({
-    status: 'linked',
-    message: 'Spotify login succeeded. Background Web Player session started.'
+    startSpotifyWebPlayerSession();
+
+    emit({
+      status: 'linked',
+      message: 'Spotify login succeeded. Background Web Player session started.'
+    });
+
+    void syncOnce();
   });
 
-  void syncOnce();
   return true;
 }
 

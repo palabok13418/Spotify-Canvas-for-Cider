@@ -191,38 +191,6 @@ function findNotificationButton(): HTMLElement | null {
   }) ?? null;
 }
 
-function findSpotifyLoginButton(): HTMLElement | null {
-  const selectors = [
-    'button[title="Log in to Spotify"]',
-    'button[aria-label="Log in to Spotify"]',
-    '[role="button"][title="Log in to Spotify"]',
-    '[role="button"][aria-label="Log in to Spotify"]',
-  ];
-
-  for (const selector of selectors) {
-    const element = document.querySelector<HTMLElement>(selector);
-    if (element) return element;
-  }
-
-  const candidates = Array.from(
-    document.querySelectorAll<HTMLElement>('button,[role="button"]'),
-  );
-
-  return candidates.find((element) => {
-    const label = [
-      element.getAttribute('aria-label'),
-      element.getAttribute('title'),
-      element.textContent,
-    ]
-      .filter(Boolean)
-      .join(' ')
-      .trim()
-      .toLowerCase();
-
-    return label === 'log in' || label === 'log in to spotify';
-  }) ?? null;
-}
-
 function registerSpotifyMirroringButton() {
   let registered = false;
   let attempts = 0;
@@ -319,9 +287,14 @@ const { plugin, customElementName } = definePluginContext({
     });
 
     const panelName = customElementName('spotify-notes-panel');
+    const loginModalName = customElementName('spotify-notes-login-modal');
 
     if (!customElements.get(panelName)) {
       customElements.define(panelName, PanelElement);
+    }
+
+    if (!customElements.get(loginModalName)) {
+      customElements.define(loginModalName, LoginModalElement);
     }
 
     addMainMenuEntry({

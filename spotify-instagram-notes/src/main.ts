@@ -76,7 +76,7 @@ function openSpotifyLoginModal() {
 function launchSpotifyOAuthLogin() {
   const musApiOrigin = new URL(MUS_API_BASE).origin;
   const url = new URL('/api/spotify/auth', MUS_API_BASE);
-  url.searchParams.set('origin', window.location.origin === 'null' ? '*' : window.location.origin);
+  url.searchParams.set('origin', window.location.origin);
   // Do not put the current Cider URL into the authorization request.
   // The signed state already binds the callback to this app origin.
   url.searchParams.set('reason', 'first-run-mirroring');

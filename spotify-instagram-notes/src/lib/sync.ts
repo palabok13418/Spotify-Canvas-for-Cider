@@ -57,7 +57,7 @@ let authValidatedAt = 0;
 let authValidationPromise: Promise<boolean> | null = null;
 const AUTH_VALIDATION_TTL_MS = 5 * 60 * 1000;
 let loginPromptHandler: (() => boolean | void) | null = null;
-let lastLoginPromptAt = 0;
+let loginPromptShown = false;
 let lastAuthErrorAt = 0;
 const eventCleanup: Array<() => void> = [];
 let lastLoggedCiderKey = '';
@@ -101,6 +101,7 @@ export function setEnabled(value: boolean) {
   enabled = value;
 
   if (value) {
+    loginPromptShown = false;
     void ensureSpotifyLinked();
     void syncOnce();
     return;
@@ -806,7 +807,7 @@ export function promptSpotifyLogin() {
   if (!enabled || loadAuth()) return false;
 
   const now = Date.now();
-  if (now - lastLoginPromptAt < 10_000) return true;
+  if (loginPromptShown) return true;
 
   errorLog('Spotify login prompt requested because no authenticated user session is available', {
     code: 'SPOTIFY_LOGIN_REQUIRED',
@@ -819,7 +820,7 @@ export function promptSpotifyLogin() {
 
   const opened = loginPromptHandler();
   if (opened !== false) {
-    lastLoginPromptAt = now;
+    loginPromptShown = true;
     emit({
       status: 'link-required',
       message: 'Log in to Spotify to enable playback mirroring.',
@@ -946,7 +947,7 @@ export function handleOAuthMessage(data: any) {
 
   authValidated = false;
   authValidatedAt = 0;
-  lastLoginPromptAt = 0;
+  loginPromptShown = false;
   lastAuthErrorAt = 0;
 
   spotifyClockRetryUnavailableUntil = 0;

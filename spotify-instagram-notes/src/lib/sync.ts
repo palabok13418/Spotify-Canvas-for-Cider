@@ -2,6 +2,7 @@ import { clearAuth, loadAuth, saveAuth } from './storage';
 import {
   completeSpotifyLogin,
   getSpotifySession,
+  migrateLegacySpotifySession,
   resolveSpotifyTrack,
   MUS_API_BASE,
   type SpotifyTrack
@@ -142,7 +143,7 @@ async function ensureSpotifyLinked() {
   if (!enabled) return false;
   if (
     authValidated &&
-    loadAuth() &&
+    loadAuth()?.sessionTicket &&
     Date.now() - authValidatedAt < AUTH_VALIDATION_TTL_MS
   ) return true;
 
@@ -151,7 +152,9 @@ async function ensureSpotifyLinked() {
   authValidationPromise = (async () => {
     const auth = loadAuth();
 
-    if (!auth?.refreshToken) {
+    const sessionCredential = auth?.sessionTicket || auth?.refreshToken;
+
+    if (!sessionCredential) {
       authValidated = false;
       reportSpotifyUnauthenticated('no-stored-session');
       promptSpotifyLogin();
@@ -163,12 +166,14 @@ async function ensureSpotifyLinked() {
     }
 
     try {
-      const session = await getSpotifySession(auth.refreshToken);
+      const session = auth?.sessionTicket
+        ? await getSpotifySession(auth.sessionTicket)
+        : await migrateLegacySpotifySession(sessionCredential);
 
-      if (session.refreshToken && session.refreshToken !== auth.refreshToken) {
+      if (session.sessionTicket) {
         saveAuth({
-          ...auth,
-          refreshToken: session.refreshToken,
+          sessionTicket: session.sessionTicket,
+          scope: auth?.scope,
           savedAt: Date.now(),
         });
       }
@@ -993,13 +998,18 @@ export function handleOAuthMessage(data: any) {
 
   void completeSpotifyLogin(loginTicket)
     .then((session) => {
-      if (session.refreshToken) {
-        saveAuth({
-          refreshToken: session.refreshToken,
-          savedAt: Date.now(),
-          scope: typeof data?.scope === 'string' ? data.scope : undefined,
-        });
+      if (!session.sessionTicket) {
+        throw Object.assign(
+          new Error('Spotify login did not return a secure session ticket'),
+          { code: 'SPOTIFY_AUTH_SESSION_EMPTY', status: 502 }
+        );
       }
+
+      saveAuth({
+        sessionTicket: session.sessionTicket,
+        scope: typeof data?.scope === 'string' ? data.scope : undefined,
+        savedAt: Date.now(),
+      });
 
       authValidated = true;
       authValidatedAt = Date.now();

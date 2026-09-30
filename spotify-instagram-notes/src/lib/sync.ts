@@ -1,5 +1,6 @@
 import { clearAuth, loadAuth, saveAuth } from './storage';
 import {
+  completeSpotifyLogin,
   getSpotifySession,
   resolveSpotifyTrack,
   MUS_API_BASE,
@@ -947,23 +948,24 @@ export function stopBridge() {
 }
 
 export function handleOAuthMessage(data: any) {
-  if (!data?.ok || !data.accessToken) {
-    warn('received an invalid Spotify OAuth callback payload');
+  const loginTicket = String(data?.loginTicket || '').trim();
+
+  if (!data?.ok || !loginTicket) {
+    warn('received an invalid Spotify OAuth callback payload', {
+      code: 'SPOTIFY_LOGIN_TICKET_MISSING',
+    });
+    emit({
+      status: 'error',
+      message: 'Spotify login returned an invalid secure session handoff.',
+    });
     return false;
   }
 
-  log('Spotify OAuth callback received', {
-    authenticated: Boolean(data.refreshToken),
-    hasRefreshToken: Boolean(data.refreshToken),
-    tokenExpMs: Number(data.tokenExpMs) || null,
+  log('Spotify OAuth callback received a secure login ticket', {
+    authenticated: true,
+    hasLoginTicket: true,
+    ticketForwardedToMusApi: true,
   });
-
-  if (data.refreshToken) {
-    saveAuth({
-      refreshToken: String(data.refreshToken),
-      savedAt: Date.now(),
-    });
-  }
 
   lastCiderKey = '';
   lastSpotifyUri = '';
@@ -984,18 +986,79 @@ export function handleOAuthMessage(data: any) {
   lastDeviceMuteTrack = '';
   lastDeviceMuteAt = 0;
 
-  void ensureSpotifyLinked().then((valid) => {
-    if (!valid || !enabled) return;
-
-    startSpotifyWebPlayerSession();
-
-    emit({
-      status: 'linked',
-      message: 'Spotify login succeeded. Background Web Player session started.'
-    });
-
-    void syncOnce();
+  emit({
+    status: 'syncing',
+    message: 'Securing Spotify session…',
   });
+
+  void completeSpotifyLogin(loginTicket)
+    .then((session) => {
+      if (session.refreshToken) {
+        saveAuth({
+          refreshToken: session.refreshToken,
+          savedAt: Date.now(),
+          scope: undefined,
+        });
+      }
+
+      authValidated = true;
+      authValidatedAt = Date.now();
+
+      log('Spotify account authenticated through Mus-API secure session handoff', {
+        authenticated: true,
+        userIdPresent: Boolean(session.user?.id),
+        product: session.product || null,
+      });
+
+      return startSpotifyWebPlayerSession();
+    })
+    .then((playerReady) => {
+      if (!playerReady || !enabled) {
+        if (!playerReady) {
+          warn('Spotify account was authenticated, but the background player could not start', {
+            code: 'SPOTIFY_BACKGROUND_PLAYER_UNAVAILABLE',
+          });
+        }
+        return;
+      }
+
+      emit({
+        status: 'linked',
+        message: 'Spotify login succeeded. Background Web Player session started.'
+      });
+
+      void syncOnce();
+    })
+    .catch((error: any) => {
+      authValidated = false;
+      authValidatedAt = 0;
+
+      const status = Number(error?.status || 0);
+      const code = String(error?.code || '');
+
+      if (status === 401 || code === 'SPOTIFY_AUTH_INVALID' || code === 'SPOTIFY_LOGIN_TICKET_INVALID') {
+        clearAuth();
+        reportSpotifyUnauthenticated('secure-login-handoff-rejected', {
+          status,
+          code,
+        });
+        promptSpotifyLogin();
+        emit({
+          status: 'link-required',
+          message: 'Spotify login could not be completed securely. Please sign in again.',
+        });
+        return;
+      }
+
+      errorLog('secure Spotify login handoff failed', {
+        code: code || 'SPOTIFY_SECURE_LOGIN_FAILED',
+        status,
+      });
+      emit({
+        status: 'error',
+        message: 'Spotify login could not be completed. Try signing in again.',
+      });
+    });
 
   return true;
 }

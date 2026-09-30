@@ -1,5 +1,6 @@
-import { loadAuth, saveAuth } from './storage';
+import { clearAuth, loadAuth, saveAuth } from './storage';
 import {
+  getSpotifySession,
   resolveSpotifyTrack,
   MUS_API_BASE,
   type SpotifyTrack
@@ -51,8 +52,12 @@ let lastMatchAttemptAt = 0;
 
 let busy = false;
 let timer = 0;
-let loginWindowOpened = false;
 let eventListenersInstalled = false;
+let authValidated = false;
+let authValidationPromise: Promise<boolean> | null = null;
+let loginPromptHandler: (() => boolean | void) | null = null;
+let lastLoginPromptAt = 0;
+let lastAuthErrorAt = 0;
 const eventCleanup: Array<() => void> = [];
 let lastLoggedCiderKey = '';
 let lastLoggedStatus = '';
@@ -95,13 +100,7 @@ export function setEnabled(value: boolean) {
   enabled = value;
 
   if (value) {
-    if (!loadAuth()) {
-      promptSpotifyLogin();
-      emit({ status: 'link-required', message: 'Spotify login required. A Spotify login window has been opened.' });
-    } else {
-      startSpotifyWebPlayerSession();
-      emit({ status: 'linked', message: 'Spotify login is active. Starting the background Web Player.' });
-    }
+    void ensureSpotifyLinked();
     void syncOnce();
     return;
   }
@@ -135,14 +134,94 @@ function emit(snapshot: BridgeSnapshot) {
   }
 }
 
-function ensureSpotifyLinked() {
-  if (loadAuth()) return true;
-  promptSpotifyLogin();
-  emit({
-    status: 'link-required',
-    message: 'Spotify login is required. A Spotify login window has been opened.',
+async function ensureSpotifyLinked() {
+  if (!enabled) return false;
+  if (authValidated && loadAuth()) return true;
+
+  if (authValidationPromise) return authValidationPromise;
+
+  authValidationPromise = (async () => {
+    const auth = loadAuth();
+
+    if (!auth?.refreshToken) {
+      authValidated = false;
+      reportSpotifyUnauthenticated('no-stored-session');
+      promptSpotifyLogin();
+      emit({
+        status: 'link-required',
+        message: 'Spotify login is required.',
+      });
+      return false;
+    }
+
+    try {
+      const session = await getSpotifySession(auth.refreshToken);
+
+      if (session.refreshToken && session.refreshToken !== auth.refreshToken) {
+        saveAuth({
+          ...auth,
+          refreshToken: session.refreshToken,
+          savedAt: Date.now(),
+        });
+      }
+
+      authValidated = true;
+      log('Spotify user authentication detected', {
+        authenticated: true,
+        product: session.product || null,
+      });
+      return true;
+    } catch (error: any) {
+      const status = Number(error?.status || 0);
+      const code = String(error?.code || '');
+
+      if (status === 401 || code === 'SPOTIFY_AUTH_INVALID') {
+        authValidated = false;
+        clearAuth();
+        reportSpotifyUnauthenticated('stored-session-invalid', {
+          status,
+          code,
+        });
+        promptSpotifyLogin();
+        emit({
+          status: 'link-required',
+          message: 'Spotify login is required.',
+        });
+        return false;
+      }
+
+      warn('could not validate the stored Spotify login session', {
+        status,
+        code,
+        message: String(error?.message || error || 'unknown error'),
+      });
+      emit({
+        status: 'error',
+        message: 'Spotify login status could not be verified. Retrying…',
+      });
+      return false;
+    }
+  })().finally(() => {
+    authValidationPromise = null;
   });
-  return false;
+
+  return authValidationPromise;
+}
+
+function reportSpotifyUnauthenticated(reason: string, details: Record<string, unknown> = {}) {
+  const now = Date.now();
+  if (now - lastAuthErrorAt < 5_000) return;
+  lastAuthErrorAt = now;
+
+  errorLog('Spotify user is not authenticated', {
+    code: 'SPOTIFY_USER_NOT_AUTHENTICATED',
+    reason,
+    ...details,
+  });
+}
+
+export function setSpotifyLoginPromptHandler(handler: (() => boolean | void) | null) {
+  loginPromptHandler = handler;
 }
 function getCiderTrack() {
   const store = (globalThis as any).__PLUGINSYS__?.Stores?.appleMusicStore;
@@ -518,7 +597,7 @@ async function syncOnce() {
   lastObservedAt = now;
   lastCiderPositionMs = cider.positionMs;
 
-  if (!ensureSpotifyLinked()) return;
+  if (!(await ensureSpotifyLinked())) return;
 
   busy = true;
 
@@ -717,39 +796,31 @@ async function syncOnce() {
 }
 
 export function promptSpotifyLogin() {
-  if (!enabled || loadAuth() || loginWindowOpened) return false;
+  if (!enabled || loadAuth()) return false;
 
-  log('opening Spotify Web Player background session and Spotify OAuth login popup through Mus-API');
+  const now = Date.now();
+  if (now - lastLoginPromptAt < 10_000) return true;
 
-  startSpotifyWebPlayerSession();
-  loginWindowOpened = true;
-  const origin = window.location.origin === 'null' ? '*' : window.location.origin;
-  const url = new URL('/api/spotify/auth', MUS_API_BASE);
-  url.searchParams.set('origin', origin);
-  url.searchParams.set('returnTo', window.location.href);
-  url.searchParams.set('reason', 'first-run-mirroring');
+  errorLog('Spotify login prompt requested because no authenticated user session is available', {
+    code: 'SPOTIFY_LOGIN_REQUIRED',
+  });
 
-  const popup = window.open(
-    url.toString(),
-    'musapi-spotify-auth',
-    'width=520,height=760,resizable=yes,scrollbars=yes'
-  );
-
-  if (!popup) {
-    loginWindowOpened = false;
-    emit({
-      status: 'link-required',
-      message: 'Spotify login is required. Open the Spotify login window from the plugin panel.',
-    });
+  if (!loginPromptHandler) {
+    warn('Spotify login prompt handler is not installed yet');
     return false;
   }
 
-  emit({
-    status: 'link-required',
-    message: 'Log in to Spotify in the new window to enable playback mirroring.',
-  });
+  const opened = loginPromptHandler();
+  if (opened !== false) {
+    lastLoginPromptAt = now;
+    emit({
+      status: 'link-required',
+      message: 'Log in to Spotify to enable playback mirroring.',
+    });
+    return true;
+  }
 
-  return true;
+  return false;
 }
 function installPlaybackEventListeners() {
   if (eventListenersInstalled) return;
@@ -811,12 +882,7 @@ export function startBridge() {
     syncIntervalMs: 1200,
   });
 
-  if (!loadAuth()) {
-    promptSpotifyLogin();
-  } else {
-    log('stored Spotify OAuth link found');
-    startSpotifyWebPlayerSession();
-  }
+  void ensureSpotifyLinked();
 
   installPlaybackEventListeners();
 
@@ -871,7 +937,9 @@ export function handleOAuthMessage(data: any) {
   lastCiderPositionMs = 0;
   lastObservedAt = 0;
 
-  loginWindowOpened = false;
+  authValidated = Boolean(data.refreshToken);
+  lastLoginPromptAt = 0;
+  lastAuthErrorAt = 0;
 
   spotifyClockRetryUnavailableUntil = 0;
   lastSpotifyClockCheckAt = 0;

@@ -57,6 +57,46 @@ export async function spotApiPlayer<T = any>(action: string, body: Record<string
   });
 }
 
+
+export interface SpotifySession {
+  refreshToken: string | null;
+  user: {
+    id: string;
+    displayName: string;
+  };
+  product: string | null;
+}
+
+export async function getSpotifySession(refreshToken: string): Promise<SpotifySession> {
+  const data = await postJson<{
+    ok: boolean;
+    refreshToken?: string | null;
+    user?: {
+      id?: string;
+      displayName?: string;
+    };
+    product?: string | null;
+  }>('/api/spotify/session', {
+    refreshToken,
+  });
+
+  if (!data.ok || !data.user?.id) {
+    const error: any = new Error('Spotify login session could not be validated');
+    error.code = 'SPOTIFY_AUTH_INVALID';
+    error.status = 401;
+    throw error;
+  }
+
+  return {
+    refreshToken: data.refreshToken ?? null,
+    user: {
+      id: String(data.user.id),
+      displayName: String(data.user.displayName || ''),
+    },
+    product: data.product == null ? null : String(data.product),
+  };
+}
+
 export interface SpotifyToken {
   accessToken: string;
   refreshToken: string | null;

@@ -37,7 +37,6 @@ async function selectPlacement(value: CanvasPlacement) {
           v-for="option in [
             ['lyrics', 'Lyrics'],
             ['navigation', 'Navigation'],
-            ['immersive', 'Immersive (One)'],
           ] as const"
           :key="option[0]"
           type="button"
@@ -50,7 +49,6 @@ async function selectPlacement(value: CanvasPlacement) {
           {{ option[1] }}
         </button>
       </div>
-      <small class="placement-hint">Immersive uses Cider's <strong>One</strong> style only.</small>
     </div>
 
     <div class="field">
@@ -82,7 +80,7 @@ async function selectPlacement(value: CanvasPlacement) {
 .field{display:grid;gap:8px}
 .field>span{font-weight:650}
 .field-heading{display:flex;align-items:center;justify-content:space-between;gap:12px}.value{font-variant-numeric:tabular-nums;opacity:.72}.transparency-slider{width:100%;margin:2px 0 0;accent-color:currentColor;cursor:pointer}.range-hint{display:flex;justify-content:space-between;font-size:12px;opacity:.60}
-.placement-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:8px}
+.placement-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
 .placement-option{border:1px solid color-mix(in srgb,currentColor 18%,transparent);background:color-mix(in srgb,currentColor 7%,transparent);color:inherit;border-radius:11px;padding:10px 14px;min-height:42px;font:inherit;font-weight:650;cursor:pointer}
 .placement-option:hover{background:color-mix(in srgb,currentColor 12%,transparent)}
 .placement-option.active{outline:2px solid currentColor;outline-offset:1px;background:color-mix(in srgb,currentColor 14%,transparent)}

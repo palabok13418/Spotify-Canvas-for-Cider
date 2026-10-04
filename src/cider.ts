@@ -3,8 +3,6 @@ import { ref, watch, type Ref } from "vue";
 export type PAPIEvent =
   | "app:ready"
   | "shell:layout_type_changed"
-  | "immersive:opened"
-  | "immersive:closed"
   | "miniplayer:opened"
   | "miniplayer:closed"
   | "browser:page_changed"
@@ -108,17 +106,3 @@ export function definePluginContext(options: PluginDefinition) {
 }
 
 
-export interface CustomImmersiveLayout {
-  name: string;
-  identifier: string;
-  component: string;
-  type?: "normal" | "portrait";
-}
-
-export function addImmersiveLayout(layout: CustomImmersiveLayout) {
-  const manager = (globalThis as any).__PLUGINSYS__?.Components?.ImmersiveLayouts;
-  if (!manager || typeof manager.addLayout !== "function") {
-    throw new Error("Cider Immersive Layout API is unavailable.");
-  }
-  return manager.addLayout(layout);
-}

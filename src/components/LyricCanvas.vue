@@ -268,19 +268,11 @@ function setRectangle(host: HTMLElement) {
     return false;
   }
 
-  if (placementIsLocal()) {
-    rootEl.style.setProperty("left", "0", "important");
-    rootEl.style.setProperty("top", "0", "important");
-    rootEl.style.setProperty("width", "100%", "important");
-    rootEl.style.setProperty("height", "100%", "important");
-    rootEl.style.setProperty("z-index", "0", "important");
-  } else {
-    rootEl.style.setProperty("left", `${Math.round(r.left * 100) / 100}px`, "important");
-    rootEl.style.setProperty("top", `${Math.round(r.top * 100) / 100}px`, "important");
-    rootEl.style.setProperty("width", `${Math.round(r.width * 100) / 100}px`, "important");
-    rootEl.style.setProperty("height", `${Math.round(r.height * 100) / 100}px`, "important");
-    rootEl.style.setProperty("z-index", "1", "important");
-  }
+  rootEl.style.setProperty("left", "0", "important");
+  rootEl.style.setProperty("top", "0", "important");
+  rootEl.style.setProperty("width", "100%", "important");
+  rootEl.style.setProperty("height", "100%", "important");
+  rootEl.style.setProperty("z-index", "0", "important");
 
   rootEl.style.setProperty("display", shouldRender.value ? "block" : "none", "important");
   portalLayer.style.setProperty("position", "absolute", "important");

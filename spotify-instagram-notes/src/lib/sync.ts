@@ -952,8 +952,22 @@ export function stopBridge() {
   log('bridge stopped');
 }
 
-export function handleOAuthMessage(data: any) {
+export function handleOAuthMessage(data: any, expectedLoginNonce = '') {
   const loginTicket = String(data?.loginTicket || '').trim();
+  const loginNonce = String(data?.loginNonce || expectedLoginNonce || '').trim();
+
+  if (!loginNonce || loginNonce.length > 256) {
+    errorLog('rejected Spotify OAuth callback because the login nonce was missing or invalid', {
+      code: 'SPOTIFY_LOGIN_NONCE_INVALID',
+      hasLoginTicket: Boolean(loginTicket),
+      hasLoginNonce: Boolean(loginNonce),
+    });
+    emit({
+      status: 'error',
+      message: 'Spotify login returned an invalid secure session handoff.',
+    });
+    return false;
+  }
 
   if (!data?.ok || !loginTicket) {
     warn('received an invalid Spotify OAuth callback payload', {
@@ -969,6 +983,7 @@ export function handleOAuthMessage(data: any) {
   log('Spotify OAuth callback received a secure encrypted login ticket', {
     authenticated: true,
     hasLoginTicket: true,
+    hasLoginNonce: true,
     ticketForwardedToMusApi: true,
   });
 
@@ -996,7 +1011,7 @@ export function handleOAuthMessage(data: any) {
     message: 'Securing Spotify session…',
   });
 
-  void completeSpotifyLogin(loginTicket)
+  void completeSpotifyLogin(loginTicket, loginNonce)
     .then((session) => {
       if (!session.sessionTicket) {
         throw Object.assign(

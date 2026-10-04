@@ -1,25 +1,21 @@
 <script setup lang="ts">
-let opening = false;
+import { ref } from 'vue';
+
+const emit = defineEmits([
+  'spotify-login-start',
+  'spotify-login-cancel',
+]);
+
+const opening = ref(false);
 
 function startLogin() {
-  if (opening) return;
-  opening = true;
-
-  globalThis.dispatchEvent(
-    new CustomEvent('spotify-login-start', {
-      bubbles: true,
-      composed: true,
-    }),
-  );
+  if (opening.value) return;
+  opening.value = true;
+  emit('spotify-login-start');
 }
 
 function cancel() {
-  globalThis.dispatchEvent(
-    new CustomEvent('spotify-login-cancel', {
-      bubbles: true,
-      composed: true,
-    }),
-  );
+  emit('spotify-login-cancel');
 }
 </script>
 

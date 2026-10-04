@@ -34,13 +34,6 @@ const NAVIGATION_SELECTORS = [
   ".q-drawer--left",
 ];
 
-const IMMERSIVE_SELECTORS = [
-  ".fullscreen-view-container",
-  ".fullscreen-view",
-  '[sfc-name*="Immersive" i]',
-  '[data-testid*="immersive" i]',
-  '[class*="immersive" i]',
-];
 
 const reducedMotionQuery = ref<MediaQueryList | null>(null);
 const transitionState = ref<"idle" | "enter" | "switch" | "exit">("idle");
@@ -167,70 +160,20 @@ function findNavigationHost(): HTMLElement | null {
   return best;
 }
 
-function looksLikeImmersiveOne(host: HTMLElement) {
-  const values = [
-    host.className,
-    host.id,
-    host.getAttribute("sfc-name"),
-    host.getAttribute("data-testid"),
-    host.getAttribute("aria-label"),
-    host.getAttribute("data-style"),
-    host.getAttribute("data-mode"),
-    host.getAttribute("style-name"),
-    host.getAttribute("immersive-style"),
-  ].filter(Boolean).join(" ");
-  const text = host.textContent?.replace(/\s+/g, " ").trim() || "";
-  return /(^|\W)one(\W|$)/i.test(values) || /(?:immersive\s*)?style\s*one/i.test(text);
-}
-
-function findImmersiveHost(): HTMLElement | null {
-  const candidates: HTMLElement[] = [];
-  for (const selector of IMMERSIVE_SELECTORS) {
-    for (const el of document.querySelectorAll<HTMLElement>(selector)) {
-      if (!isDisplayed(el)) continue;
-      const r = el.getBoundingClientRect();
-      if (r.width < 300 || r.height < 250) continue;
-      candidates.push(el);
-    }
-  }
-
-  const fullscreen = document.querySelector<HTMLElement>(".fullscreen-view-container");
-  if (fullscreen && isDisplayed(fullscreen)) candidates.push(fullscreen);
-
-  const unique = [...new Set(candidates)];
-  const one = unique.filter(looksLikeImmersiveOne);
-  if (one.length) {
-    one.sort((a, b) => rectArea(b) - rectArea(a));
-    return one[0];
-  }
-
-  // Cider-2/older builds can expose only a fullscreen surface without a style
-  // label. In that case we stay fail-closed instead of drawing into the wrong
-  // immersive variant.
-  return null;
-}
 
 function findPlacementHost() {
-  if (cfg.placement === "navigation") return findNavigationHost();
-  if (cfg.placement === "immersive") return findImmersiveHost();
-  return findRightLyricsHost();
-}
-
-function placementIsLocal() {
-  return cfg.placement === "lyrics" || cfg.placement === "navigation";
+  return cfg.placement === "navigation" ? findNavigationHost() : findRightLyricsHost();
 }
 
 function ensureRoot(host: HTMLElement | null) {
   rootEl ??= document.querySelector<HTMLElement>("canvascider-main-canvas");
   if (!rootEl) return false;
 
-  if (placementIsLocal() && host) {
-    if (rootEl.parentElement !== host) host.insertBefore(rootEl, host.firstChild);
-  } else if (rootEl.parentElement !== document.body) {
-    document.body.appendChild(rootEl);
+  if (host && rootEl.parentElement !== host) {
+    host.insertBefore(rootEl, host.firstChild);
   }
 
-  rootEl.style.setProperty("position", placementIsLocal() ? "absolute" : "fixed", "important");
+  rootEl.style.setProperty("position", "absolute", "important");
   rootEl.style.setProperty("margin", "0", "important");
   rootEl.style.setProperty("padding", "0", "important");
   rootEl.style.setProperty("pointer-events", "none", "important");
@@ -373,10 +316,6 @@ function scheduleSync(reason: string) {
 }
 
 async function sync(reason: string) {
-  if (String(cfg.placement) === "immersive") {
-    if (rootEl) rootEl.style.setProperty("display", "none", "important");
-    return;
-  }
   if (syncing || activeAbort || !canvasUrl.value || !canvasActive.value || canvasAnalysisPending.value || canvasSuppressedForAppleArtwork.value || reducedMotion.value) return;
   syncing = true;
   try {
@@ -391,7 +330,7 @@ async function sync(reason: string) {
     if (!setRectangle(host)) return;
     try { await videoEl!.play(); } catch {}
     if (lastPlacement !== cfg.placement) {
-      applyTransition(String(cfg.placement) === "immersive" ? "enter" : "exit");
+      applyTransition("exit");
       lastPlacement = cfg.placement;
     }
   } finally {
@@ -449,7 +388,7 @@ watch(
     }
 
     if (placement !== oldPlacement) {
-      applyTransition(placement === "immersive" ? "enter" : "exit");
+      applyTransition("exit");
       lastPlacement = placement;
     }
 
@@ -680,15 +619,6 @@ canvascider-main-canvas[data-canvas-placement="lyrics"] .layer::after{
   mix-blend-mode:screen;
 }
 
-canvascider-main-canvas[data-canvas-placement="immersive"] .layer{
-  --fade: 24%;
-  -webkit-mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.32) 11%,#000 24%,#000 76%,rgba(0,0,0,.32) 89%,transparent 100%),
-    linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.22) 10%,#000 22%,#000 78%,rgba(0,0,0,.22) 90%,transparent 100%);
-  mask-image:linear-gradient(to right,transparent 0%,rgba(0,0,0,.32) 11%,#000 24%,#000 76%,rgba(0,0,0,.32) 89%,transparent 100%),
-    linear-gradient(to bottom,transparent 0%,rgba(0,0,0,.22) 10%,#000 22%,#000 78%,rgba(0,0,0,.22) 90%,transparent 100%);
-  -webkit-mask-composite:source-in;
-  mask-composite:intersect;
-}
 
 @media (prefers-reduced-motion: reduce){
   .canvas-transition-enter,

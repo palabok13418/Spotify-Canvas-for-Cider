@@ -111,7 +111,6 @@ When one Canvas changes to another, the incoming Canvas expands from the same st
 
 The actual Canvas video is kept separate from the animated reveal mask so the video itself is not zoomed or distorted during the transition.
 
-### Immersive
 
 ---
 

@@ -24,6 +24,7 @@ async function postJson<T>(path: string, body: unknown): Promise<T> {
     headers: {
       'content-type': 'application/json',
       'cache-control': 'no-store',
+      'x-musaudio-client': 'cider-spotify-notes-bridge/1',
     },
     body: JSON.stringify(body),
     cache: 'no-store',
@@ -52,8 +53,11 @@ export async function getSpotifySession(sessionTicket: string): Promise<SpotifyS
   return validateSpotifySession({ sessionTicket });
 }
 
-export async function completeSpotifyLogin(loginTicket: string): Promise<SpotifySession> {
-  const data = await validateSpotifySession({ loginTicket });
+export async function completeSpotifyLogin(
+  loginTicket: string,
+  loginNonce: string,
+): Promise<SpotifySession> {
+  const data = await validateSpotifySession({ loginTicket, loginNonce });
 
   if (!data.sessionTicket) {
     const error: any = new Error('Spotify login completed without a secure session ticket');
@@ -72,6 +76,7 @@ export async function migrateLegacySpotifySession(refreshToken: string): Promise
 async function validateSpotifySession(body: {
   sessionTicket?: string;
   loginTicket?: string;
+  loginNonce?: string;
   refreshToken?: string;
 }): Promise<SpotifySession> {
   const data = await postJson<{

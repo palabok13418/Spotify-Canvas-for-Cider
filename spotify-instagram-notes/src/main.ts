@@ -96,6 +96,14 @@ function createSpotifyLoginNonce() {
 
 function launchSpotifyOAuthLogin() {
   const musApiOrigin = new URL(MUS_API_BASE).origin;
+
+  if (spotifyLoginPopup && !spotifyLoginPopup.closed) {
+    try {
+      spotifyLoginPopup.focus();
+    } catch {}
+    return true;
+  }
+
   const loginNonce = createSpotifyLoginNonce();
   if (!loginNonce) {
     console.error(PREFIX, 'Spotify login was blocked because a secure login nonce could not be generated', {
@@ -112,13 +120,6 @@ function launchSpotifyOAuthLogin() {
   // Do not put the current Cider URL into the authorization request.
   // The signed state already binds the callback to this app origin.
   url.searchParams.set('reason', 'first-run-mirroring');
-
-  if (spotifyLoginPopup && !spotifyLoginPopup.closed) {
-    try {
-      spotifyLoginPopup.focus();
-    } catch {}
-    return true;
-  }
 
   const popup = window.open(
     url.toString(),

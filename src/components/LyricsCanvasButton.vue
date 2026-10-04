@@ -37,13 +37,26 @@ function findLyricsButton(): HTMLButtonElement | null {
 function applyNativeButtonShape(lyrics: HTMLButtonElement) {
   if (!button) return;
   button.className = lyrics.className;
-  button.style.cssText = [
-    "position:relative",
-    "display:inline-flex",
-    "align-items:center",
-    "justify-content:center",
-    "overflow:hidden",
-  ].join(";");
+  button.style.cssText = "";
+  for (const [property, value] of [
+    ["position", "relative"],
+    ["display", "inline-flex"],
+    ["align-items", "center"],
+    ["justify-content", "center"],
+    ["overflow", "hidden"],
+    ["background", "transparent"],
+    ["background-color", "transparent"],
+    ["border", "0"],
+    ["box-shadow", "none"],
+    ["outline", "none"],
+    ["filter", "none"],
+    ["backdrop-filter", "none"],
+    ["-webkit-backdrop-filter", "none"],
+    ["appearance", "none"],
+    ["-webkit-appearance", "none"],
+  ] as const) {
+    button.style.setProperty(property, value, "important");
+  }
 }
 
 function ensureButton() {

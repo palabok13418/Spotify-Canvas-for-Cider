@@ -30,7 +30,6 @@ Current placements:
 | --- | --- |
 | **Lyrics** | Places Canvas behind the Lyrics area |
 | **Navigation** | Places Canvas in the left navigation area |
-| **Immersive (One)** | Uses a dedicated Cider Immersive layout named **One** |
 
 ## Do I need a Spotify token?
 
@@ -47,13 +46,10 @@ Spotify authentication stays on the hosted Canvas API. The plugin only sends the
 - 🎬 Spotify Canvas playback inside Cider
 - 📝 Lyrics placement
 - 🧭 Navigation placement
-- 🖼️ Dedicated Immersive **One** layout
 - ✨ Four-point-star Canvas reveal animation
 - 🔄 Animated Canvas-to-Canvas switching
-- 🌠 Fast-spin Immersive entry and reverse exit animation
 - 🧠 Apple Music animated-artwork comparison before showing a duplicate Canvas
 - 🌈 Lyrics-only left-side ambiance
-- 🌫️ Four-sided Immersive edge blending
 - 🎚️ Canvas transparency from visible to transparent
 - ⚡ Track-change detection and stale-request cancellation
 - 💾 Successful Canvas-result caching
@@ -73,7 +69,7 @@ The normal flow is:
 5. Spotify Canvas data is requested for that track.
 6. Before activation, the plugin checks whether Cider already has matching animated album artwork.
 7. When a different Canvas is needed, the renderer animates the old and new videos instead of abruptly replacing the current image.
-8. The Canvas is shown in Lyrics, Navigation, or the dedicated Immersive One layout.
+8. The Canvas is shown in Lyrics or Navigation.
 
 ---
 
@@ -88,14 +84,6 @@ The Canvas itself does not use a whole-video blend mode for this effect.
 ### Navigation
 
 Canvas is placed in the left navigation area. Navigation text and controls remain interactive.
-
-### Immersive (One)
-
-Immersive placement is implemented as a real Cider custom Immersive layout named **One**, using Cider's PluginKit Immersive Layout API.
-
-This means the plugin does not try to guess an arbitrary fullscreen DOM element and inject Canvas into it.
-
-The Immersive layout has its own centered Canvas surface, a blurred background, and edge blending around all four sides.
 
 ---
 
@@ -125,10 +113,6 @@ The actual Canvas video is kept separate from the animated reveal mask so the vi
 
 ### Immersive
 
-The dedicated Immersive One layout uses the same four-point-star concept with a fast rotation on entry.
-
-Leaving Immersive reverses that motion by rotating back toward the center while shrinking into the star shape.
-
 ---
 
 ## Settings
@@ -137,11 +121,8 @@ The settings panel currently includes:
 
 - **Lyrics**
 - **Navigation**
-- **Immersive (One)**
 
 It also includes the **Canvas transparency** slider.
-
-The Immersive option only refers to the plugin's dedicated **One** Immersive layout.
 
 ---
 
@@ -209,10 +190,9 @@ The project uses TypeScript, Vue, Vite, and Cider PluginKit v4.
 
 | File | Purpose |
 | --- | --- |
-| `src/main.ts` | Plugin entry point, custom-element registration, and Immersive layout registration |
+| `src/main.ts` | Plugin entry point and custom-element registration |
 | `src/components/Overlay.vue` | Track detection, Canvas API requests, caching, analysis, and lifecycle |
 | `src/components/LyricCanvas.vue` | Lyrics and Navigation renderer plus Canvas animations |
-| `src/components/ImmersiveCanvasOne.vue` | Dedicated Immersive One renderer |
 | `src/artwork-analysis.ts` | Apple animated-artwork detection and frame comparison |
 | `src/components/CanvasSettingsPanel.vue` | Placement and transparency settings |
 | `src/core/currentTrack.ts` | Current Apple Music/Cider metadata |

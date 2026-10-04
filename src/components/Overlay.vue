@@ -352,8 +352,6 @@ onMounted(() => {
   });
 
   cleanupEvents = [
-    safeSubscribe("immersive:opened", () => scheduleSync()),
-    safeSubscribe("immersive:closed", () => scheduleSync()),
     safeSubscribe("miniplayer:opened", () => scheduleSync()),
     safeSubscribe("miniplayer:closed", () => scheduleSync()),
     safeSubscribe("browser:page_changed", () => scheduleSync()),

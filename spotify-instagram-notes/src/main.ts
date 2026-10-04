@@ -34,6 +34,7 @@ export const CustomElements = {
 
 let closeSpotifyLoginModal: (() => void) | null = null;
 let spotifyLoginPopup: Window | null = null;
+let spotifyLoginNonce = '';
 let spotifyLoginModalOpen = false;
 
 function openSpotifyLoginModal() {
@@ -73,10 +74,41 @@ function openSpotifyLoginModal() {
   return true;
 }
 
+function createSpotifyLoginNonce() {
+  try {
+    if (typeof globalThis.crypto?.randomUUID === 'function') {
+      return globalThis.crypto.randomUUID();
+    }
+
+    const bytes = new Uint8Array(32);
+    globalThis.crypto?.getRandomValues?.(bytes);
+    if (bytes.some((value) => value !== 0)) {
+      return Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+    }
+  } catch (error) {
+    console.error(PREFIX, 'unable to create the secure Spotify login nonce', {
+      code: 'SPOTIFY_LOGIN_NONCE_GENERATION_FAILED',
+      error: String(error),
+    });
+  }
+  return '';
+}
+
 function launchSpotifyOAuthLogin() {
   const musApiOrigin = new URL(MUS_API_BASE).origin;
+  const loginNonce = createSpotifyLoginNonce();
+  if (!loginNonce) {
+    console.error(PREFIX, 'Spotify login was blocked because a secure login nonce could not be generated', {
+      code: 'SPOTIFY_LOGIN_NONCE_GENERATION_FAILED',
+    });
+    return false;
+  }
+
+  spotifyLoginNonce = loginNonce;
+
   const url = new URL('/api/spotify/auth', MUS_API_BASE);
   url.searchParams.set('origin', window.location.origin);
+  url.searchParams.set('nonce', loginNonce);
   // Do not put the current Cider URL into the authorization request.
   // The signed state already binds the callback to this app origin.
   url.searchParams.set('reason', 'first-run-mirroring');
@@ -320,14 +352,34 @@ const { plugin, customElementName } = definePluginContext({
       if (event.origin !== musApiOrigin) return;
       if (event.data?.type !== 'musaudio_spotify_oauth') return;
 
-      console.info(PREFIX, 'accepted Spotify OAuth callback message from Mus-API');
-      spotifyLoginPopup = null;
+      if (!spotifyLoginPopup || event.source !== spotifyLoginPopup) {
+        console.error(PREFIX, 'rejected Spotify OAuth callback message from an unexpected window', {
+          code: 'SPOTIFY_OAUTH_MESSAGE_SOURCE_REJECTED',
+        });
+        return;
+      }
 
-      if (event.data?.data?.ok) {
+      const payload = event.data?.data ?? {};
+      const returnedNonce = String(payload?.loginNonce || '').trim();
+
+      if (!spotifyLoginNonce || !returnedNonce || returnedNonce !== spotifyLoginNonce) {
+        console.error(PREFIX, 'rejected Spotify OAuth callback because the login nonce did not match', {
+          code: 'SPOTIFY_LOGIN_NONCE_MISMATCH',
+          hasExpectedNonce: Boolean(spotifyLoginNonce),
+          hasReturnedNonce: Boolean(returnedNonce),
+        });
+        return;
+      }
+
+      console.info(PREFIX, 'accepted Spotify OAuth callback message from the expected Mus-API window');
+      spotifyLoginPopup = null;
+      spotifyLoginNonce = '';
+
+      if (payload?.ok) {
         closeSpotifyLoginModal?.();
       }
 
-      handleOAuthMessage(event.data.data);
+      handleOAuthMessage(payload, returnedNonce);
     });
 
     // The bridge starts when the plugin loads. The panel is only a control surface.

@@ -24,7 +24,7 @@ concurrency:
 
 jobs:
   build-plugin:
-    name: Install and build Cider plugin
+    name: Install, type-check, build, and package Cider plugin
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -50,3 +50,24 @@ jobs:
 
       - name: Type-check and build plugin
         run: pnpm build
+
+      - name: Package installable Cider plugin
+        shell: bash
+        run: |
+          set -euo pipefail
+          test -s dist/plugin.js
+          test -s dist/plugin.yml
+          rm -f Spotify-Notes-Bridge.zip
+          (
+            cd dist
+            zip -r ../Spotify-Notes-Bridge.zip .
+          )
+          unzip -l Spotify-Notes-Bridge.zip
+
+      - name: Upload prepared plugin ZIP
+        uses: actions/upload-artifact@v4
+        with:
+          name: spotify-notes-bridge-plugin
+          path: spotify-instagram-notes/Spotify-Notes-Bridge.zip
+          if-no-files-found: error
+          retention-days: 30

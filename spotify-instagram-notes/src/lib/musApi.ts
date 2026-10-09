@@ -116,6 +116,9 @@ export interface SpotifyToken {
 export async function refreshSpotifyToken(sessionTicket: string): Promise<SpotifyToken> {
   const data = await postJson<{
     ok: boolean;
+    error?: string;
+    detail?: string;
+    status?: number;
     accessToken?: string;
     sessionTicket?: string | null;
     tokenExpMs?: number;

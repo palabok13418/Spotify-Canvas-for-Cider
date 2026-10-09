@@ -221,8 +221,7 @@ async function ensureSpotifyLinked() {
 
       warn('could not validate the stored Spotify login session', {
         status,
-        code,
-        message: String(error?.message || error || 'unknown error'),
+        code: code || 'SPOTIFY_SESSION_VALIDATION_FAILED',
       });
       emit({
         status: 'error',
@@ -460,9 +459,8 @@ async function findSpotifyTrack(cider: {
     return result;
   } catch (err: any) {
     warn('Mus-API track resolution failed', {
-      status: err?.status || null,
-      message: String(err?.message || err || 'unknown error'),
-      detail: err?.detail || null,
+      status: Number(err?.status) || null,
+      code: String(err?.code || 'SPOTIFY_TRACK_RESOLUTION_FAILED'),
     });
     return null;
   }
@@ -569,8 +567,7 @@ async function syncSpotifyClock(reason: string, force = false) {
     warn('headless Spotify playback clock sync failed', {
       reason,
       status: Number(error?.status) || 0,
-      message: String(error?.message || error || 'unknown error'),
-      code: String(error?.code || ''),
+      code: String(error?.code || 'SPOTIFY_CLOCK_SYNC_FAILED'),
     });
   }
 }
@@ -796,24 +793,18 @@ async function syncOnce() {
     }
   } catch (error: any) {
     const status = Number(error?.status || 0);
-    const message = String(error?.message || error || 'Spotify bridge error');
+    const code = String(error?.code || 'SPOTIFY_BRIDGE_ERROR');
 
     errorLog('sync operation failed', {
       status,
-      message,
-      cider: {
-        title: cider.title,
-        artist: cider.artist,
-        album: cider.album || null,
-        playing: cider.playing,
-      },
+      code,
     });
 
     emit({
       status: status === 401 ? 'link-required' : 'error',
       message: status === 401
         ? 'Spotify login session needs to be linked again.'
-        : message,
+        : 'Spotify bridge encountered an error. Check the console status and error code.',
       ciderTitle: cider.title,
       ciderArtist: cider.artist,
       spotifyTrack: currentResolvedTrack,

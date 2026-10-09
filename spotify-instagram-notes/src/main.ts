@@ -21,7 +21,6 @@ const PREFIX = '[Spotify Notes Bridge]';
 console.info(PREFIX, 'plugin entry loaded', {
   version: PluginConfig.version,
   musApiBase: MUS_API_BASE,
-  href: globalThis.location?.href || null,
 });
 
 const PanelElement = defineCustomElement(SpotifyNotesPanel, { shadowRoot: false });
@@ -36,6 +35,7 @@ let closeSpotifyLoginModal: (() => void) | null = null;
 let spotifyLoginPopup: Window | null = null;
 let spotifyLoginNonce = '';
 let spotifyLoginModalOpen = false;
+let spotifyLoginModalElement: HTMLElement | null = null;
 
 function openSpotifyLoginModal() {
   if (spotifyLoginModalOpen) return true;
@@ -48,16 +48,22 @@ function openSpotifyLoginModal() {
   dialogElement.addEventListener('close', () => {
     closeSpotifyLoginModal = null;
     spotifyLoginModalOpen = false;
+    spotifyLoginModalElement = null;
   }, { once: true });
 
   const element = document.createElement(customElementName('spotify-notes-login-modal'));
+  spotifyLoginModalElement = element;
   element.addEventListener('spotify-login-start', () => {
-    launchSpotifyOAuthLogin();
+    const opened = launchSpotifyOAuthLogin();
+    if (!opened) {
+      element.dispatchEvent(new CustomEvent('spotify-login-failed', { bubbles: true, composed: true }));
+    }
   });
   element.addEventListener('spotify-login-cancel', () => {
     closeDialog();
     closeSpotifyLoginModal = null;
     spotifyLoginModalOpen = false;
+    spotifyLoginModalElement = null;
   });
 
   dialogElement.appendChild(element);
@@ -68,6 +74,7 @@ function openSpotifyLoginModal() {
     } catch {}
     closeSpotifyLoginModal = null;
     spotifyLoginModalOpen = false;
+    spotifyLoginModalElement = null;
   };
 
   openDialog();
@@ -378,6 +385,10 @@ const { plugin, customElementName } = definePluginContext({
 
       if (payload?.ok) {
         closeSpotifyLoginModal?.();
+      } else {
+        spotifyLoginModalElement?.dispatchEvent(
+          new CustomEvent('spotify-login-failed', { bubbles: true, composed: true })
+        );
       }
 
       handleOAuthMessage(payload, returnedNonce);

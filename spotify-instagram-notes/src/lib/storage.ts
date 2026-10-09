@@ -15,11 +15,16 @@ function read(raw: string | null): StoredSpotifyAuth | null {
   try {
     const value = JSON.parse(raw);
 
-    const sessionTicket =
+    const rawSessionTicket =
       typeof value?.sessionTicket === 'string' ? value.sessionTicket.trim() : '';
+    const sessionTicket = rawSessionTicket.length <= 16 * 1024 &&
+      /^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/.test(rawSessionTicket)
+      ? rawSessionTicket
+      : '';
 
-    const refreshToken =
+    const rawRefreshToken =
       typeof value?.refreshToken === 'string' ? value.refreshToken.trim() : '';
+    const refreshToken = rawRefreshToken.length <= 8192 ? rawRefreshToken : '';
 
     if (!sessionTicket && !refreshToken) return null;
 
@@ -36,7 +41,18 @@ function read(raw: string | null): StoredSpotifyAuth | null {
 
 export function loadAuth(): StoredSpotifyAuth | null {
   try {
-    return read(localStorage.getItem(KEY)) || read(localStorage.getItem(LEGACY_KEY));
+    const current = read(localStorage.getItem(KEY));
+    if (current?.sessionTicket) return current;
+
+    const legacy = read(localStorage.getItem(LEGACY_KEY));
+    if (legacy) {
+      // Return the legacy token only in memory for one migration attempt. Do not
+      // keep a raw Spotify refresh token persisted when migration fails offline.
+      try { localStorage.removeItem(LEGACY_KEY); } catch {}
+      return legacy;
+    }
+
+    return current;
   } catch {
     return null;
   }
@@ -48,7 +64,13 @@ export function saveAuth(auth: {
   savedAt?: number;
 }) {
   const sessionTicket = String(auth.sessionTicket || '').trim();
-  if (!sessionTicket) throw new Error('SPOTIFY_SESSION_TICKET_MISSING');
+  if (
+    !sessionTicket ||
+    sessionTicket.length > 16 * 1024 ||
+    !/^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/.test(sessionTicket)
+  ) {
+    throw new Error('SPOTIFY_SESSION_TICKET_INVALID');
+  }
 
   localStorage.setItem(KEY, JSON.stringify({
     sessionTicket,

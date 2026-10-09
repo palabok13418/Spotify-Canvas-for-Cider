@@ -4,14 +4,22 @@ import { ref } from 'vue';
 const emit = defineEmits([
   'spotify-login-start',
   'spotify-login-cancel',
+  'spotify-login-failed',
 ]);
 
 const opening = ref(false);
+const loginError = ref('');
 
 function startLogin() {
   if (opening.value) return;
+  loginError.value = '';
   opening.value = true;
   emit('spotify-login-start');
+}
+
+function loginFailed() {
+  opening.value = false;
+  loginError.value = 'Spotify sign-in could not open or complete. Try again, or allow Cider to open the Spotify login window.';
 }
 
 function cancel() {
@@ -20,7 +28,7 @@ function cancel() {
 </script>
 
 <template>
-  <div class="login-shell" role="dialog" aria-labelledby="spotify-login-title">
+  <div class="login-shell" role="dialog" aria-labelledby="spotify-login-title" @spotify-login-failed="loginFailed">
     <div class="glass">
       <div class="eyebrow">SPOTIFY NOTES BRIDGE</div>
       <h2 id="spotify-login-title">Sign in to Spotify</h2>
@@ -33,6 +41,8 @@ function cancel() {
         Mus-API receives the OAuth result and the plugin stores only the
         resulting session token needed to keep the connection alive.
       </p>
+
+      <p v-if="loginError" class="login-error" role="alert">{{ loginError }}</p>
 
       <div class="secure-row" aria-label="Secure authentication">
         <span class="secure-dot" aria-hidden="true"></span>
@@ -98,6 +108,16 @@ p {
 .privacy {
   margin-top: 12px;
   color: rgba(255,255,255,.58);
+  font-size: 11px;
+}
+
+.login-error {
+  margin-top: 12px;
+  padding: 9px 11px;
+  border: 1px solid rgba(255,140,140,.25);
+  border-radius: 10px;
+  color: rgba(255,205,205,.95);
+  background: rgba(255,70,70,.08);
   font-size: 11px;
 }
 

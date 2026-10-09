@@ -55,6 +55,17 @@ function warn(message: string, details?: unknown) {
   else console.warn(PREFIX, message, details);
 }
 
+function safeFailure(error: unknown, fallback = 'SPOTIFY_PLAYER_OPERATION_FAILED') {
+  const value = error as { code?: unknown; status?: unknown } | null;
+  const rawCode = typeof value?.code === 'string' ? value.code : fallback;
+  const code = /^[A-Z0-9_.-]{1,100}$/i.test(rawCode) ? rawCode : fallback;
+  const statusValue = Number(value?.status);
+  return {
+    code,
+    status: Number.isFinite(statusValue) && statusValue > 0 ? statusValue : null,
+  };
+}
+
 async function getAccessToken(forceRefresh = false) {
   const auth = loadAuth();
   if (!auth?.sessionTicket) return null;
@@ -79,7 +90,7 @@ async function getAccessToken(forceRefresh = false) {
     }
     return accessToken;
   } catch (error) {
-    warn('could not refresh Spotify Web Playback SDK token', error);
+    warn('could not refresh Spotify Web Playback SDK token', safeFailure(error, 'SPOTIFY_TOKEN_REFRESH_FAILED'));
     accessToken = '';
     accessTokenExpiresAt = 0;
     return null;
@@ -366,7 +377,7 @@ export async function muteSpotifyWebPlayer() {
     await player.setVolume(0);
     return true;
   } catch (error) {
-    warn('failed to mute headless Spotify player', error);
+    warn('failed to mute headless Spotify player', safeFailure(error, 'SPOTIFY_PLAYER_MUTE_FAILED'));
     return false;
   }
 }
@@ -382,7 +393,7 @@ export async function pauseSpotifyWebPlayer() {
     currentPlaying = false;
     return true;
   } catch (error) {
-    warn('failed to pause headless Spotify player', error);
+    warn('failed to pause headless Spotify player', safeFailure(error, 'SPOTIFY_PLAYER_PAUSE_FAILED'));
     return false;
   }
 }
@@ -395,7 +406,7 @@ export async function resumeSpotifyWebPlayer() {
     currentPlaying = true;
     return true;
   } catch (error) {
-    warn('failed to resume headless Spotify player', error);
+    warn('failed to resume headless Spotify player', safeFailure(error, 'SPOTIFY_PLAYER_RESUME_FAILED'));
     return false;
   }
 }
@@ -407,7 +418,7 @@ export async function seekSpotifyWebPlayer(positionMs: number) {
     await player.seek(Math.max(0, Math.floor(positionMs)));
     return true;
   } catch (error) {
-    warn('failed to seek headless Spotify player', error);
+    warn('failed to seek headless Spotify player', safeFailure(error, 'SPOTIFY_PLAYER_SEEK_FAILED'));
     return false;
   }
 }
@@ -423,7 +434,7 @@ export async function getSpotifyWebPlayerPlaybackState() {
     }
     return state;
   } catch (error) {
-    warn('failed to read headless Spotify player state', error);
+    warn('failed to read headless Spotify player state', safeFailure(error, 'SPOTIFY_PLAYER_STATE_FAILED'));
     return lastState;
   }
 }

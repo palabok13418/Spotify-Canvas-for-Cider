@@ -1,0 +1,52 @@
+name: Spotify Instagram Notes Plugin Build
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - "spotify-instagram-notes/**"
+      - ".github/workflows/spotify-instagram-notes.yml"
+  pull_request:
+    branches:
+      - main
+    paths:
+      - "spotify-instagram-notes/**"
+      - ".github/workflows/spotify-instagram-notes.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: spotify-instagram-notes-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-plugin:
+    name: Install and build Cider plugin
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: spotify-instagram-notes
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: "9.10.0"
+
+      - name: Install plugin dependencies
+        run: pnpm install --no-frozen-lockfile
+
+      - name: Type-check and build plugin
+        run: pnpm build

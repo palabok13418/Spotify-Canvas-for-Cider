@@ -61,6 +61,14 @@ jobs:
           repository: palabok13418/Mus-API
           ref: main
           path: mus-api
+          fetch-depth: 1
+          filter: blob:none
+          sparse-checkout: |
+            /package.json
+            /api/spotify/_util.js
+            /api/spotify/session.js
+            /scripts/test-spotify-session-security.mjs
+          sparse-checkout-cone-mode: false
 
       - name: Set up Node.js
         uses: actions/setup-node@v4

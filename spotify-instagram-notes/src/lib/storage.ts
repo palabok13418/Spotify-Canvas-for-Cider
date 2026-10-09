@@ -18,7 +18,7 @@ function read(raw: string | null): StoredSpotifyAuth | null {
     const rawSessionTicket =
       typeof value?.sessionTicket === 'string' ? value.sessionTicket.trim() : '';
     const sessionTicket = rawSessionTicket.length <= 16 * 1024 &&
-      /^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/.test(rawSessionTicket)
+      /^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(rawSessionTicket)
       ? rawSessionTicket
       : '';
 
@@ -67,7 +67,7 @@ export function saveAuth(auth: {
   if (
     !sessionTicket ||
     sessionTicket.length > 16 * 1024 ||
-    !/^[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$/.test(sessionTicket)
+    !/^[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+$/.test(sessionTicket)
   ) {
     throw new Error('SPOTIFY_SESSION_TICKET_INVALID');
   }

@@ -37,6 +37,17 @@ let spotifyLoginNonce = '';
 let spotifyLoginModalOpen = false;
 let spotifyLoginModalElement: HTMLElement | null = null;
 
+function notifySpotifyLoginFailed() {
+  // The Vue custom element has no shadow root. Dispatch on the component root so
+  // its listener can reset the button if the popup is blocked or OAuth fails.
+  const target =
+    spotifyLoginModalElement?.querySelector<HTMLElement>('.login-shell') ||
+    spotifyLoginModalElement;
+  target?.dispatchEvent(
+    new CustomEvent('spotify-login-failed', { bubbles: true, composed: true })
+  );
+}
+
 function openSpotifyLoginModal() {
   if (spotifyLoginModalOpen) return true;
 
@@ -55,9 +66,7 @@ function openSpotifyLoginModal() {
   spotifyLoginModalElement = element;
   element.addEventListener('spotify-login-start', () => {
     const opened = launchSpotifyOAuthLogin();
-    if (!opened) {
-      element.dispatchEvent(new CustomEvent('spotify-login-failed', { bubbles: true, composed: true }));
-    }
+    if (!opened) notifySpotifyLoginFailed();
   });
   element.addEventListener('spotify-login-cancel', () => {
     closeDialog();
@@ -386,9 +395,7 @@ const { plugin, customElementName } = definePluginContext({
       if (payload?.ok) {
         closeSpotifyLoginModal?.();
       } else {
-        spotifyLoginModalElement?.dispatchEvent(
-          new CustomEvent('spotify-login-failed', { bubbles: true, composed: true })
-        );
+        notifySpotifyLoginFailed();
       }
 
       handleOAuthMessage(payload, returnedNonce);
